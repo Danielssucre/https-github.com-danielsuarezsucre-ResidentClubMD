@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.db
+backups/
+verify_logs.py
+audit_ghost.py
+fix_db.py
+verify_db_telemetry.py

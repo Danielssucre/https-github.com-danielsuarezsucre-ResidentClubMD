@@ -1,0 +1,8 @@
+streamlit
+passlib
+pandas
+argon2-cffi
+openpyxl
+plotly
+numpy
+altair

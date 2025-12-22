@@ -1,0 +1,14 @@
+# Entorno virtual
+.venv/
+venv/
+
+# Base de datos de SQLite
+*.db
+*.db-journal
+prisma_srs.db
+
+# Secretos de Streamlit
+.streamlit/secrets.toml
+
+# Archivos de VS Code
+.vscode/
