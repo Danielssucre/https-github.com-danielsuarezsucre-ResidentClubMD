@@ -18,6 +18,8 @@ import re
 # --- MÓDULOS DEPLOY V1 ---
 import database_manager as dbm
 import auth_handler as auth
+import ui_components as ui
+import fsrs_engine as fsrs
 
 def clean_ai_prefixes(text):
     """
@@ -1102,56 +1104,7 @@ def calculate_user_score(username, days_limit=3):
     return visible_score, num_creadas, num_respuestas, debt
 
 def show_productivity_widget():
-    """Muestra un widget de productividad mejorado, visualmente consistente para todos los usuarios en modo intensivo."""
-    conn = get_db_conn()
-    user_settings = conn.execute(
-        "SELECT is_intensive, max_inactivity_days, intensive_start_date FROM users WHERE username = ?",
-        (st.session_state.current_user,)
-    ).fetchone()
-    conn.close()
-
-    if not (user_settings and user_settings['is_intensive']):
-        return
-
-    days_limit = user_settings['max_inactivity_days']
-    score, _, _, debt = calculate_user_score(st.session_state.current_user, days_limit)
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🔥 Modo Intensivo Activo")
-
-    # --- LÓGICA DE RENDERIZADO CONDICIONAL ---
-    is_in_grace_period = False
-    days_active = 0
-    if user_settings['intensive_start_date']:
-        start_date = datetime.datetime.strptime(user_settings['intensive_start_date'], '%Y-%m-%d').date()
-        days_active = (datetime.date.today() - start_date).days
-        if days_active < days_limit:
-            is_in_grace_period = True
-
-    # Renderizado visual (se muestra siempre la barra y el puntaje)
-    progress_value = min(score, 30) / 30.0
-    st.sidebar.progress(progress_value)
-    st.sidebar.metric(label=f"Cuota ({days_limit} días)", value=f"{score} / 30 Pts")
-
-    if is_in_grace_period:
-        st.sidebar.success(f"🛡️ Periodo de Gracia (Día {days_active + 1}/{days_limit})")
-        if score < 30:
-            faltante = 30 - score
-            crear_nec = math.ceil(faltante / 2)
-            st.sidebar.caption(f"Te faltan {faltante} pts. Puedes responder {faltante} preguntas o crear {crear_nec} nuevas.")
-        else:
-            st.sidebar.caption("¡Ya cumpliste la cuota! Sigue así.")
-
-    else: # Modo Normal (sin gracia)
-        if debt > 0:
-            st.sidebar.caption(f"⚠️ Saldando deuda de {debt} pts del ciclo anterior.")
-
-        if score >= 30:
-            st.sidebar.success("✅ Cuota Cubierta")
-        else:
-            st.sidebar.warning("⚠️ En riesgo de eliminación")
-        
-        st.sidebar.caption("Responde (1pt) o Crea (2pts) para sumar.")
+    ui.show_productivity_widget()
 
 def get_index_safely(lista, valor):
     """
@@ -1567,64 +1520,10 @@ def show_create_page():
                 conn.close()
                 st.success("¡Pregunta guardada con éxito!")
 
-class FSRS_v5_Engine:
-    def __init__(self):
-        # Parámetros estándar FSRS v5 (The 17 Weights)
-        self.p = [0.40255, 1.18385, 3.173, 15.69105, 7.19605, 0.5345, 1.4604, 0.0046, 0.618, 2.4849, 0.0191, 0.9695, 0.2863, 0.9012, 1.3068, 0.7197, 2.8796]
-        self.request_retention = 0.90
-
-    def calculate_next_review(self, current_s, current_d, current_reps, rating, days_elapsed):
-        # Rating: 1 (Again), 2 (Hard), 3 (Good), 4 (Easy)
-        # Si es la primera vez (reps=0)
-        if current_reps == 0:
-            new_s = self.p[rating - 1]
-            new_d = self.p[4] - (rating - 3) * self.p[5]
-            new_d = min(max(new_d, 1), 10)
-            return new_s, new_d
-        # Repasos posteriores
-        # 1. Actualizar Dificultad (D)
-        new_d = current_d - self.p[6] * (rating - 3)
-        new_d = self.p[5] * self.p[0] + (1 - self.p[5]) * new_d
-        new_d = min(max(new_d, 1), 10)
-        # 2. Actualizar Estabilidad (S)
-        if rating == 1: # Olvido
-            new_s = self.p[11] * math.pow(new_d, -self.p[12]) * (math.pow(current_s + 1, self.p[13]) - 1) * math.exp(self.p[14] * (1 - self.request_retention))
-        else: # Recuerdo
-            hard_penalty = self.p[15] if rating == 2 else 1
-            easy_bonus = self.p[16] if rating == 4 else 1
-            # Factor de ganancia de estabilidad
-            s_inc = math.exp(self.p[8]) * (11 - new_d) * math.pow(current_s, -self.p[9]) * (math.exp(self.p[10] * (1 - self.request_retention)) - 1) * hard_penalty * easy_bonus
-            new_s = current_s * (1 + s_inc)
-        return new_s, new_d
-        
-    def get_next_interval_days(self, stability):
-        new_interval = stability * 9 * (1 / self.request_retention - 1)
-        return max(1, round(new_interval))
+# FSRS Engine logic moved to fsrs_engine.py
 
 # DEFINICIÓN MAESTRA DEL GOLDEN RATIO (Sin tildes para compatibilidad)
-GOLDEN_RATIO_DETAILED = {
-    'Pediatría': 16,
-    'Ginecología y Obstetricia': 14,
-    'Cardiología': 12,
-    'Cirugía General': 10,
-    'Urgencias': 10,
-    'Infectología': 8,
-    'Nefrología': 8,
-    'Neurología': 8,
-    'Endocrinología': 7,
-    'Neumología': 7,
-    'Gastroenterología': 6,
-    'Psiquiatría': 6,
-    'Hematología': 5,
-    'Reumatología': 5,
-    'Ortopedia': 5,
-    'Epidemiología': 5,
-    'Urología': 4,
-    'Otorrinolaringología': 3,
-    'Oftalmología': 3,
-    'Neurocirugía': 3,
-    'Vascular': 3
-}
+# GOLDEN_RATIO_DETAILED moved to fsrs_engine.py
 
 def get_next_question_for_user(username, practice_mode=False): # practice_mode es ahora ignorado
     """
