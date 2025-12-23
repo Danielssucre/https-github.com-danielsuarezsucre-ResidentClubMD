@@ -20,6 +20,7 @@ import database_manager as dbm
 import auth_handler as auth
 import ui_components as ui
 import fsrs_engine as fsrs
+import matrix_engine as matrix # Nuevo módulo Worker
 
 def clean_ai_prefixes(text):
     """
@@ -52,6 +53,15 @@ if 'cache_cleared_session' not in st.session_state:
 # Usamos el manager para garantizar WAL y Rutas correctas en Render
 def get_db_conn():
     return dbm.get_db_conn()
+
+# --- MATRIX WORKER BOOTSTRAP (SINGLETON) ---
+@st.cache_resource
+def bootstrap_matrix():
+    """Arranque seguro del hilo de La Matriz."""
+    matrix.start_matrix_worker()
+
+# Lanzar inmediatamente al cargar el script (st.cache_resource evita duplicados)
+bootstrap_matrix()
 
 # ==========================================
 # ==========================================
@@ -2997,6 +3007,26 @@ def render_matrix_admin():
     }
     
     st.markdown(f"**Estado Actual:** {status_map.get(current_status, current_status)}")
+    
+    col_play, col_pause = st.columns(2)
+    
+    with col_play:
+        if st.button("▶️ ACTIVAR MATRIZ", type="primary", use_container_width=True):
+            conn_status.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'ACTIVE')")
+            conn_status.commit()
+            st.success("Matriz ACTIVADA. El worker comenzará a procesar.")
+            st.rerun()
+
+    with col_pause:
+        if st.button("⏸️ PAUSAR (Kill-Switch)", type="secondary", use_container_width=True):
+            conn_status.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'PAUSED')")
+            conn_status.commit()
+            st.warning("Matriz PAUSADA. El consumo se detendrá en el próximo ciclo.")
+            st.rerun()
+
+    conn_status.close() # Cerrar conexión de status
+    
+    st.markdown("---")
     
     # Selector de Objetivo
     topic_map = {row['topic_name']: row['id'] for row in pending_topics_rows}
