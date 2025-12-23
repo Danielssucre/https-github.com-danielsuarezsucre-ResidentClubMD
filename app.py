@@ -43,6 +43,11 @@ auth.init_session()
 # Contexto para hashear contraseñas
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
+# --- CONTROL DE CACHÉ DE SESIÓN (FIX RETENCIÓN) ---
+if 'cache_cleared_session' not in st.session_state:
+    st.cache_data.clear()
+    st.session_state.cache_cleared_session = True
+
 # --- CONEXIÓN BASE DE DATOS (DELEGADA) ---
 # Usamos el manager para garantizar WAL y Rutas correctas en Render
 def get_db_conn():
@@ -55,14 +60,11 @@ def get_db_conn():
 
 def get_user_ip():
     """
-    Obtiene la IP del usuario (Simulación local/Session para MVP).
-    En producción real, esto requeriría leer headers X-Forwarded-For.
+    Obtiene la IP del usuario usando el handler robusto (Render compatible).
     """
-    # Simulación persistente por sesión para diferenciar usuarios en local
-    if 'user_ip_sim' not in st.session_state:
-        # Genera una IP aleatoria fija para esta sesión
-        st.session_state.user_ip_sim = f"10.0.0.{random.randint(1, 255)}"
-    return st.session_state.user_ip_sim
+    if 'user_ip_stable' not in st.session_state:
+        st.session_state.user_ip_stable = auth.get_remote_ip()
+    return st.session_state.user_ip_stable
 
 def check_guest_access():
     """
@@ -4299,8 +4301,11 @@ def main():
             st.toast(msg, icon="🎟️")
         # --- FIN GATEKEEPER ---
 
-        st.sidebar.title(f"Bienvenido, {st.session_state.current_user}")
-        st.sidebar.caption(f"Rol: {st.session_state.user_role}")
+        if st.session_state.user_role == 'guest':
+            st.sidebar.title("¡Bienvenido!")
+        else:
+            st.sidebar.title(f"Bienvenido, {st.session_state.current_user}")
+            st.sidebar.caption(f"Rol: {st.session_state.user_role}")
 
         # --- INICIO SECCIÓN MODO INTENSIVO: Widget de Productividad ---
         show_productivity_widget()
