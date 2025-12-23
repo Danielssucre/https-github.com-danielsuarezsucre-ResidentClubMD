@@ -4352,7 +4352,7 @@ def run_auto_backup():
     
     # 1. Definir rutas
     # Ruta de la base de datos original (producción o local)
-    source_db = DB_PATH
+    source_db = dbm.DB_PATH
     
     # Directorio de backups (relativo a la ubicación de app.py)
     backup_dir = "backups" 
