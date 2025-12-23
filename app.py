@@ -3008,8 +3008,6 @@ def render_matrix_admin():
     
     st.markdown(f"**Estado Actual:** {status_map.get(current_status, current_status)}")
     
-    st.markdown(f"**Estado Actual:** {status_map.get(current_status, current_status)}")
-    
     col_play, col_pause = st.columns(2)
 
     with col_play:
@@ -3040,6 +3038,10 @@ def render_matrix_admin():
 
     with col_test:
         if st.button("🐞 TEST SÍNCRONO (1 TEMA)", type="secondary", use_container_width=True):
+            if current_status == 'ACTIVE':
+                st.warning("⚠️ **ALERTA:** La Matriz está ACTIVA. Es probable que el Worker y tu Test compitan por los temas.")
+                st.info("Pausa la Matriz primero para un diagnóstico limpio.")
+            
             st.info("Iniciando prueba síncrona en Main Thread...")
             
             # Instanciar worker temporal
@@ -3049,7 +3051,16 @@ def render_matrix_admin():
             topic = debug_worker.get_next_topic()
             
             if not topic:
-                st.warning("No hay temas pendientes o la cola está bloqueada.")
+                # Diagnóstico: ¿Por qué null?
+                conn_diag = dbm.get_db_conn()
+                cnt = conn_diag.execute("SELECT count(*) as c FROM matrix_topics WHERE status = 'PROCESANDO'").fetchone()['c']
+                conn_diag.close()
+                
+                if cnt > 0:
+                    st.error(f"❌ COLA BLOQUEADA: Hay {cnt} tema(s) en estado 'PROCESANDO'.")
+                    st.write("👉 Solución: Pulsa 'Limpiar Temas Atascados' y asegúrate de que la Matriz esté PAUSADA.")
+                else:
+                    st.warning("📭 No hay temas pendientes en la fecha/prioridad seleccionada.")
             else:
                 st.write(f"Procesando: {topic['topic_name']} (ID: {topic['id']})")
                 
