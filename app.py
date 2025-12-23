@@ -3145,7 +3145,7 @@ def render_matrix_admin():
                     "INSERT OR REPLACE INTO system_config (key, value) VALUES ('gemini_api_key', ?)",
                     (new_api_key,)
                 )
-                print(f"💾 [FRONTEND] Intentando guardar en ruta absoluta: {os.path.abspath(DB_PATH)}")
+                print(f"💾 [FRONTEND] Intentando guardar en ruta absoluta: {os.path.abspath(dbm.DB_PATH)}")
                 print(f"💾 [FRONTEND] Clave recibida: {new_api_key[:5]}********")
                 conn_cfg.commit()
                 st.success("¡Clave de API guardada con éxito!")
@@ -4011,7 +4011,7 @@ def show_admin_panel():
         st.subheader("📦 Copia de Seguridad (Backup)")
 
         try:
-            with open(DB_PATH, "rb") as fp:
+            with open(dbm.DB_PATH, "rb") as fp:
                 st.download_button(
                     label="Descargar Base de Datos (SQLite)",
                     data=fp,
@@ -4020,7 +4020,7 @@ def show_admin_panel():
                 )
             st.info("Este archivo contiene todos los datos de usuarios y preguntas. Guárdalo en un lugar seguro.")
         except FileNotFoundError:
-            st.error(f"Error: No se encontró el archivo de la base de datos en la ruta: {DB_PATH}")
+            st.error(f"Error: No se encontró el archivo de la base de datos en la ruta: {dbm.DB_PATH}")
         except Exception as e:
             st.error(f"Ocurrió un error inesperado al leer el archivo de la base de datos: {e}")
         
