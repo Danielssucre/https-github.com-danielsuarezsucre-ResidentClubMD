@@ -3026,7 +3026,17 @@ def render_matrix_admin():
             time.sleep(1)
             st.rerun()
 
-    # conn_status se cierra arriba en el bloque try/finally, no necesitamos cerrarlo de nuevo aqui si usamos run_atomic_query
+    # Botón de Emergencia para limpiar cola atascada
+    if st.button("🧹 Limpiar Temas Atascados (Reset)", type="secondary", use_container_width=True):
+        # Invocamos la lógica de recuperación (Safe atomic operation)
+        temp_worker = matrix.MatrixWorker()
+        temp_worker.reset_stuck_topics()
+        st.success("Cola de procesamiento reiniciada. Los temas 'PROCESANDO' han vuelto a 'PENDIENTE'.")
+        time.sleep(1)
+        st.rerun()
+
+    # Cerrar la conexión de lectura explícitamente al final del bloque de estado
+    conn_status.close()
     
     st.markdown("---")
     
@@ -3036,9 +3046,9 @@ def render_matrix_admin():
     selected_target_id = topic_map.get(selected_topic_name)
 
     c1, c2, c3 = st.columns(3)
-    if c1.button("▶️ INICIAR BUCLE INFINITO", use_container_width=True):
-        conn_status.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'RUNNING')")
-        conn_status.commit()
+    if c1.button("▶️ INICIAR PROCESO", use_container_width=True):
+        dbm.run_atomic_query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'ACTIVE')")
+        # conn_status.commit() <- ELIMINADO: Ya usamos atomic query
         st.success('🚀 Modo Industrial Activado (Lógica ADN)')
         time.sleep(1); st.rerun()
     if c2.button("⏯️ PROCESAR SOLO SELECCIONADO", use_container_width=True):

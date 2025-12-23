@@ -22,6 +22,9 @@ class MatrixWorker(threading.Thread):
         """Bucle principal del worker."""
         print("🐇 [MATRIX] Worker iniciado y esperando órdenes...")
         
+        # Limpieza inicial de temas atascados al arrancar
+        self.reset_stuck_topics()
+        
         while not self.stop_event.is_set():
             try:
                 # 1. Chequear Status (Kill-Switch)
@@ -60,10 +63,19 @@ class MatrixWorker(threading.Thread):
 
     def get_db_conn(self):
         """Obtiene una conexión dedicada para este hilo."""
-        # Importante: No usar check_same_thread=False en general, 
-        # pero aquí cada operación abre/cierra su propia conexión o usa una local.
-        # dbm.get_db_conn() ya configura timeouts y WAL.
         return dbm.get_db_conn()
+
+    def reset_stuck_topics(self):
+        """Devuelve temas 'PROCESANDO' a 'PENDIENTE' (Recovery)."""
+        conn = self.get_db_conn()
+        try:
+            conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE' WHERE status = 'PROCESANDO'")
+            conn.commit()
+            print("🐇 [MATRIX] Recuperación: Temas atascados devueltos a la cola.")
+        except Exception as e:
+            print(f"⚠️ [MATRIX] Error en recuperación: {e}")
+        finally:
+            conn.close()
 
     def get_matrix_status(self):
         conn = self.get_db_conn()
@@ -116,7 +128,7 @@ class MatrixWorker(threading.Thread):
         topic_name = topic['topic_name']
         category = topic.get('target_category', 'General')
         
-        # 1. Marcar como PROCESANDO
+        # 1. Marcar como PROCESANDO (Independiente para bloqueo visual)
         self.update_topic_status(topic_id, 'PROCESANDO')
         
         # 2. Obtener Credenciales y Config
@@ -128,28 +140,66 @@ class MatrixWorker(threading.Thread):
             
         prompt_template = self.get_prompt_template()
         if not prompt_template:
-            # Fallback básico si no hay template
             prompt_template = "Genera 1 pregunta de opción múltiple sobre {topic_name} para médicos residentes. Formato JSON: enunciado, opciones, correcta, retroalimentacion."
 
         # 3. Construir Prompt
         final_prompt = prompt_template.format(topic_name=topic_name)
         
-        # 4. Llamar a Gemini
+        # 4. Llamar a Gemini (Sin DB Lock)
         generated_data = self.call_gemini_api(api_key, final_prompt)
         
         if not generated_data:
             self.update_topic_status(topic_id, 'ERROR', "Fallo en API o JSON inválido")
             return False
             
-        # 5. Insertar Preguntas en DB
-        saved_count = self.save_questions(generated_data, category, topic_name)
-        
-        if saved_count > 0:
-            self.update_topic_status(topic_id, 'COMPLETADO')
-            return True
-        else:
-            self.update_topic_status(topic_id, 'ERROR', "No se pudieron guardar preguntas")
+        # 5. TRANSACCIÓN ATÓMICA FINAL (Guardar + Completar)
+        conn = self.get_db_conn()
+        try:
+            # Normalizar datos
+            data = generated_data if isinstance(generated_data, list) else [generated_data]
+            count = 0
+            
+            for q in data:
+                # Validar campos mínimos
+                if not all(k in q for k in ('enunciado', 'opciones', 'correcta')):
+                    continue
+                
+                ops = q['opciones']
+                ops_str = "|".join(ops) if isinstance(ops, list) else str(ops)
+                
+                conn.execute("""
+                    INSERT INTO questions 
+                    (owner_username, enunciado, opciones, correcta, retroalimentacion, tag_categoria, tag_tema, created_at, difficulty, ai_generated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """, (
+                    'Matrix_AI', 
+                    q['enunciado'], 
+                    ops_str, 
+                    q['correcta'], 
+                    q.get('retroalimentacion', 'Generado por IA'), 
+                    category, 
+                    topic_name, 
+                    datetime.datetime.now(),
+                    'Media'
+                ))
+                count += 1
+            
+            if count > 0:
+                conn.execute("UPDATE matrix_topics SET status = 'COMPLETADO' WHERE id = ?", (topic_id,))
+                conn.commit() # COMMIT FINAL (TODO O NADA)
+                return True
+            else:
+                conn.rollback() # No guardar nada si no hay preguntas válidas
+                self.update_topic_status(topic_id, 'ERROR', "Datos inválidos (no se guardaron)")
+                return False
+                
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ [MATRIX] Error transacción final: {e}")
+            self.update_topic_status(topic_id, 'ERROR', f"DB Error: {str(e)}")
             return False
+        finally:
+            conn.close()
 
     def call_gemini_api(self, api_key, prompt):
         headers = {'Content-Type': 'application/json'}
@@ -170,7 +220,7 @@ class MatrixWorker(threading.Thread):
                 result = response.json()
                 try:
                     text_content = result['candidates'][0]['content']['parts'][0]['text']
-                    return json.loads(text_content) # Esperamos una lista de objetos o un objeto
+                    return json.loads(text_content)
                 except (KeyError, json.JSONDecodeError, IndexError) as e:
                     print(f"⚠️ [MATRIX] Error parseando respuesta JSON: {e}")
                     return None
@@ -180,51 +230,6 @@ class MatrixWorker(threading.Thread):
         except Exception as e:
             print(f"⚠️ [MATRIX] Excepción de red: {e}")
             return None
-
-    def save_questions(self, data, category, topic_name):
-        conn = self.get_db_conn()
-        count = 0
-        try:
-            # Normalizar a lista si devuelve un solo objeto
-            if isinstance(data, dict): 
-                data = [data]
-                
-            for q in data:
-                # Validar campos mínimos
-                if not all(k in q for k in ('enunciado', 'opciones', 'correcta')):
-                    continue
-                
-                # Convertir opciones a string pipe-separated si vienen como lista
-                ops = q['opciones']
-                if isinstance(ops, list):
-                    ops_str = "|".join(ops)
-                else:
-                    ops_str = str(ops)
-                
-                conn.execute("""
-                    INSERT INTO questions 
-                    (owner_username, enunciado, opciones, correcta, retroalimentacion, tag_categoria, tag_tema, created_at, difficulty, ai_generated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-                """, (
-                    'Matrix_AI', 
-                    q['enunciado'], 
-                    ops_str, 
-                    q['correcta'], 
-                    q.get('retroalimentacion', 'Generado por IA'), 
-                    category, 
-                    topic_name, 
-                    datetime.datetime.now(),
-                    'Media'
-                ))
-                count += 1
-            
-            conn.commit()
-            return count
-        except Exception as e:
-            print(f"❌ [MATRIX] Error guardando preguntas: {e}")
-            return 0
-        finally:
-            conn.close()
 
     def update_topic_status(self, topic_id, new_status, error_msg=None):
         conn = self.get_db_conn()
