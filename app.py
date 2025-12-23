@@ -3008,6 +3008,10 @@ def render_matrix_admin():
     
     st.markdown(f"**Estado Actual:** {status_map.get(current_status, current_status)}")
     
+    st.markdown(f"**Estado Actual:** {status_map.get(current_status, current_status)}")
+    
+    col_play, col_pause = st.columns(2)
+
     with col_play:
         if st.button("▶️ ACTIVAR MATRIZ", type="primary", use_container_width=True):
             dbm.run_atomic_query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'ACTIVE')")
