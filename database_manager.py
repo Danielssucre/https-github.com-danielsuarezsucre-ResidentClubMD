@@ -44,6 +44,23 @@ def get_db_conn():
         
     return conn
 
+def run_atomic_query(query, params=()):
+    """
+    Ejecuta una consulta de escritura (INSERT/UPDATE/DELETE) de forma atómica:
+    Abre conexión -> Ejecuta -> Commit -> Cierra.
+    Previene errores de 'Database is locked' o 'Closed database'.
+    """
+    conn = get_db_conn()
+    try:
+        conn.execute(query, params)
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"❌ Error DB Atomico: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_all_categories():
     conn = get_db_conn()
     try:

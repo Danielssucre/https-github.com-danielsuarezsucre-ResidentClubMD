@@ -3008,23 +3008,21 @@ def render_matrix_admin():
     
     st.markdown(f"**Estado Actual:** {status_map.get(current_status, current_status)}")
     
-    col_play, col_pause = st.columns(2)
-    
     with col_play:
         if st.button("▶️ ACTIVAR MATRIZ", type="primary", use_container_width=True):
-            conn_status.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'ACTIVE')")
-            conn_status.commit()
+            dbm.run_atomic_query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'ACTIVE')")
             st.success("Matriz ACTIVADA. El worker comenzará a procesar.")
+            time.sleep(1) # Dar tiempo a que DB actualice
             st.rerun()
 
     with col_pause:
         if st.button("⏸️ PAUSAR (Kill-Switch)", type="secondary", use_container_width=True):
-            conn_status.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'PAUSED')")
-            conn_status.commit()
+            dbm.run_atomic_query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'PAUSED')")
             st.warning("Matriz PAUSADA. El consumo se detendrá en el próximo ciclo.")
+            time.sleep(1)
             st.rerun()
 
-    conn_status.close() # Cerrar conexión de status
+    # conn_status se cierra arriba en el bloque try/finally, no necesitamos cerrarlo de nuevo aqui si usamos run_atomic_query
     
     st.markdown("---")
     
