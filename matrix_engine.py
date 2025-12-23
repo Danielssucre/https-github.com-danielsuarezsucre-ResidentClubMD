@@ -20,10 +20,10 @@ class MatrixWorker(threading.Thread):
 
     def run(self):
         """Bucle principal del worker."""
-        print("🐇 [MATRIX] Worker iniciado y esperando órdenes...")
+        print("[LOG_MATRIZ] Worker iniciado y esperando órdenes...")
         
         # Limpieza inicial de temas atascados al arrancar
-        self.reset_stuck_topics()
+        self.emergency_recovery()
         
         while not self.stop_event.is_set():
             try:
@@ -35,13 +35,14 @@ class MatrixWorker(threading.Thread):
                     topic = self.get_next_topic()
                     
                     if topic:
-                        print(f"🐇 [MATRIX] Procesando tema: {topic['topic_name']} (ID: {topic['id']})")
+                        print(f"[LOG_MATRIZ] Consultando tema ID: {topic['id']}")
                         success = self.process_topic(topic)
                         
                         if success:
-                            print(f"✅ [MATRIX] Tema completado: {topic['topic_name']}")
+                            # Log de éxito ya se imprime dentro de process_topic
+                            pass
                         else:
-                            print(f"❌ [MATRIX] Fallo en tema: {topic['topic_name']}")
+                            print(f"[LOG_MATRIZ] Fallo en tema: {topic['topic_name']}")
                         
                         # Pausa de cortesía para no saturar DB ni API
                         time.sleep(2) 
@@ -58,22 +59,22 @@ class MatrixWorker(threading.Thread):
                     time.sleep(5)
                     
             except Exception as e:
-                print(f"⚠️ [MATRIX] Error en bucle principal: {e}")
+                print(f"[LOG_MATRIZ] Error CRÍTICO en bucle principal: {e}")
                 time.sleep(5) # Prevenir bucle de error rápido
 
     def get_db_conn(self):
         """Obtiene una conexión dedicada para este hilo."""
         return dbm.get_db_conn()
 
-    def reset_stuck_topics(self):
-        """Devuelve temas 'PROCESANDO' a 'PENDIENTE' (Recovery)."""
+    def emergency_recovery(self):
+        """Devuelve temas 'PROCESANDO' a 'PENDIENTE' (Recovery Anti-Zombie)."""
         conn = self.get_db_conn()
         try:
             conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE' WHERE status = 'PROCESANDO'")
             conn.commit()
-            print("🐇 [MATRIX] Recuperación: Temas atascados devueltos a la cola.")
+            print("[LOG_MATRIZ] Recuperación de Emergencia: Temas Zombie devueltos a la cola.")
         except Exception as e:
-            print(f"⚠️ [MATRIX] Error en recuperación: {e}")
+            print(f"[LOG_MATRIZ] Error en recuperación: {e}")
         finally:
             conn.close()
 
@@ -128,15 +129,13 @@ class MatrixWorker(threading.Thread):
         topic_name = topic['topic_name']
         category = topic.get('target_category', 'General')
         
-        print(f"🐇 [MATRIX] Iniciando tema: {topic_name}")
-        
         # 1. Marcar como PROCESANDO (Independiente para bloqueo visual)
         self.update_topic_status(topic_id, 'PROCESANDO')
         
         # 2. Obtener Credenciales y Config
         api_key = self.get_api_key()
         if not api_key:
-            print("❌ [MATRIX] No API Key found.")
+            print("[LOG_MATRIZ] ERROR: No API Key found.")
             # Si falta la Key, es un error de config, no tiene sentido reintentar inmediato
             self.update_topic_status(topic_id, 'ERROR', "Falta API Key")
             return False
@@ -153,11 +152,13 @@ class MatrixWorker(threading.Thread):
         
         if not generated_data:
             # Fallo en API: Volver a PENDIENTE para reintentar luego
-            print(f"⚠️ [MATRIX] Fallo API. Reencolando tema: {topic_name}")
+            print(f"[LOG_MATRIZ] Fallo API. Reencolando tema: {topic_name}")
             self.update_topic_status(topic_id, 'PENDIENTE', "Fallo API - Reintento")
             return False
             
-        print(f"🐇 [MATRIX] API Respuesta recibida correctamente.")
+        # Log de Telemetría solicitado
+        response_len = len(str(generated_data))
+        print(f"[LOG_MATRIZ] Respuesta API recibida (Longitud: {response_len} caracteres)")
             
         # 5. TRANSACCIÓN ATÓMICA FINAL (Guardar + Completar)
         conn = self.get_db_conn()
@@ -194,17 +195,17 @@ class MatrixWorker(threading.Thread):
             if count > 0:
                 conn.execute("UPDATE matrix_topics SET status = 'COMPLETADO' WHERE id = ?", (topic_id,))
                 conn.commit() # COMMIT FINAL (TODO O NADA)
-                print(f"🐇 [MATRIX] ÉXITO: Pregunta guardada e inventario actualizado ({count} preguntas).")
+                print(f"[LOG_MATRIZ] ÉXITO: Transacción completada en disco. Inventario +{count}.")
                 return True
             else:
                 conn.rollback() # No guardar nada si no hay preguntas válidas
-                print(f"⚠️ [MATRIX] Datos inválidos en respuesta. Reencolando.")
+                print(f"[LOG_MATRIZ] Datos inválidos en respuesta. Reencolando.")
                 self.update_topic_status(topic_id, 'PENDIENTE', "Datos inválidos (no sc guardaron)")
                 return False
                 
         except Exception as e:
             conn.rollback()
-            print(f"❌ [MATRIX] Error transacción final: {e}")
+            print(f"[LOG_MATRIZ] Error transacción final: {e}")
             # Error de base de datos podría ser temporal (Lock), reintentar
             self.update_topic_status(topic_id, 'PENDIENTE', f"DB Error: {str(e)}")
             return False
