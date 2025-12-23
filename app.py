@@ -3027,13 +3027,44 @@ def render_matrix_admin():
             st.rerun()
 
     # Botón de Emergencia para limpiar cola atascada
-    if st.button("🧹 Limpiar Temas Atascados (Reset)", type="secondary", use_container_width=True):
-        # Invocamos la lógica de recuperación (Safe atomic operation)
-        temp_worker = matrix.MatrixWorker()
-        temp_worker.reset_stuck_topics()
-        st.success("Cola de procesamiento reiniciada. Los temas 'PROCESANDO' han vuelto a 'PENDIENTE'.")
-        time.sleep(1)
-        st.rerun()
+    col_reset, col_test = st.columns(2)
+    
+    with col_reset:
+        if st.button("🧹 Limpiar Temas Atascados (Reset)", type="secondary", use_container_width=True):
+            # Invocamos la lógica de recuperación (Safe atomic operation)
+            temp_worker = matrix.MatrixWorker()
+            temp_worker.emergency_recovery()
+            st.success("Cola de procesamiento reiniciada. Los temas 'PROCESANDO' han vuelto a 'PENDIENTE'.")
+            time.sleep(1)
+            st.rerun()
+
+    with col_test:
+        if st.button("🐞 TEST SÍNCRONO (1 TEMA)", type="secondary", use_container_width=True):
+            st.info("Iniciando prueba síncrona en Main Thread...")
+            
+            # Instanciar worker temporal
+            debug_worker = matrix.MatrixWorker()
+            
+            # Buscar tema
+            topic = debug_worker.get_next_topic()
+            
+            if not topic:
+                st.warning("No hay temas pendientes o la cola está bloqueada.")
+            else:
+                st.write(f"Procesando: {topic['topic_name']} (ID: {topic['id']})")
+                
+                # Ejecutar proceso BLOQUEANTE
+                # Esto nos dirá si explota por API Key, Red, o SQL
+                try:
+                    success = debug_worker.execute_sequential_process(topic)
+                    if success:
+                        st.success(f"✅ ÉXITO: Tema {topic['id']} generado y guardado.")
+                    else:
+                        st.error("❌ FALLO: Revisa la consola interna para el traceback.")
+                except Exception as e:
+                    st.error(f"❌ EXCEPCIÓN NO CONTROLADA: {e}")
+                    
+            st.warning("Prueba finalizada.")
 
     # Cerrar la conexión de lectura explícitamente al final del bloque de estado
     conn_status.close()
