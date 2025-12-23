@@ -128,6 +128,8 @@ class MatrixWorker(threading.Thread):
         topic_name = topic['topic_name']
         category = topic.get('target_category', 'General')
         
+        print(f"🐇 [MATRIX] Iniciando tema: {topic_name}")
+        
         # 1. Marcar como PROCESANDO (Independiente para bloqueo visual)
         self.update_topic_status(topic_id, 'PROCESANDO')
         
@@ -135,6 +137,7 @@ class MatrixWorker(threading.Thread):
         api_key = self.get_api_key()
         if not api_key:
             print("❌ [MATRIX] No API Key found.")
+            # Si falta la Key, es un error de config, no tiene sentido reintentar inmediato
             self.update_topic_status(topic_id, 'ERROR', "Falta API Key")
             return False
             
@@ -149,8 +152,12 @@ class MatrixWorker(threading.Thread):
         generated_data = self.call_gemini_api(api_key, final_prompt)
         
         if not generated_data:
-            self.update_topic_status(topic_id, 'ERROR', "Fallo en API o JSON inválido")
+            # Fallo en API: Volver a PENDIENTE para reintentar luego
+            print(f"⚠️ [MATRIX] Fallo API. Reencolando tema: {topic_name}")
+            self.update_topic_status(topic_id, 'PENDIENTE', "Fallo API - Reintento")
             return False
+            
+        print(f"🐇 [MATRIX] API Respuesta recibida correctamente.")
             
         # 5. TRANSACCIÓN ATÓMICA FINAL (Guardar + Completar)
         conn = self.get_db_conn()
@@ -187,16 +194,19 @@ class MatrixWorker(threading.Thread):
             if count > 0:
                 conn.execute("UPDATE matrix_topics SET status = 'COMPLETADO' WHERE id = ?", (topic_id,))
                 conn.commit() # COMMIT FINAL (TODO O NADA)
+                print(f"🐇 [MATRIX] ÉXITO: Pregunta guardada e inventario actualizado ({count} preguntas).")
                 return True
             else:
                 conn.rollback() # No guardar nada si no hay preguntas válidas
-                self.update_topic_status(topic_id, 'ERROR', "Datos inválidos (no se guardaron)")
+                print(f"⚠️ [MATRIX] Datos inválidos en respuesta. Reencolando.")
+                self.update_topic_status(topic_id, 'PENDIENTE', "Datos inválidos (no sc guardaron)")
                 return False
                 
         except Exception as e:
             conn.rollback()
             print(f"❌ [MATRIX] Error transacción final: {e}")
-            self.update_topic_status(topic_id, 'ERROR', f"DB Error: {str(e)}")
+            # Error de base de datos podría ser temporal (Lock), reintentar
+            self.update_topic_status(topic_id, 'PENDIENTE', f"DB Error: {str(e)}")
             return False
         finally:
             conn.close()
