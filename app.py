@@ -14,6 +14,7 @@ from passlib.context import CryptContext  # Para hashing de contraseñas
 import numpy as np
 import shutil
 import re
+import traceback
 
 # --- MÓDULOS DEPLOY V1 ---
 import database_manager as dbm
@@ -3073,7 +3074,8 @@ def render_matrix_admin():
                     else:
                         st.error("❌ FALLO: Revisa la consola interna para el traceback.")
                 except Exception as e:
-                    st.error(f"❌ EXCEPCIÓN NO CONTROLADA: {e}")
+                    st.error(f"❌ EXCEPCIÓN: {e}")
+                    st.code(traceback.format_exc(), language="python")
                     
             st.warning("Prueba finalizada.")
 
