@@ -20,10 +20,12 @@ class MatrixWorker(threading.Thread):
 
     def run(self):
         """Bucle principal del worker."""
-        print("[LOG_MATRIZ] Worker iniciado y esperando órdenes...")
+        print("[MATRIZ] -> Worker iniciado. Ejecutando protocolo de arranque...")
         
         # Limpieza inicial de temas atascados al arrancar
         self.emergency_recovery()
+        
+        print("[MATRIZ] -> Esperando órdenes del sistema...")
         
         while not self.stop_event.is_set():
             try:
@@ -31,36 +33,37 @@ class MatrixWorker(threading.Thread):
                 status = self.get_matrix_status()
                 
                 if status == 'ACTIVE':
-                    # 2. Buscar trabajo
+                    # 2. Buscar trabajo (Solo 1 tema a la vez)
                     topic = self.get_next_topic()
                     
                     if topic:
-                        print(f"[LOG_MATRIZ] Consultando tema ID: {topic['id']}")
-                        success = self.process_topic(topic)
+                        topic_name = topic['topic_name']
+                        print(f"[MATRIZ] -> Detectado tema pendiente: {topic_name} (ID: {topic['id']})")
+                        
+                        # 3. Procesamiento Secuencial Estricto
+                        success = self.execute_sequential_process(topic)
                         
                         if success:
-                            # Log de éxito ya se imprime dentro de process_topic
-                            pass
+                            print(f"[MATRIZ] -> CICLO COMPLETADO para: {topic_name}")
                         else:
-                            print(f"[LOG_MATRIZ] Fallo en tema: {topic['topic_name']}")
+                            print(f"[MATRIZ] -> CICLO FALLIDO para: {topic_name}")
                         
-                        # Pausa de cortesía para no saturar DB ni API
-                        time.sleep(2) 
+                        # 4. Enfriamiento (Cooldown) para proteger disco
+                        print("[MATRIZ] -> Enfriando motores (10s)...")
+                        time.sleep(10) 
                     else:
-                        # No hay temas, dormir un poco más
+                        # No hay temas, dormir
                         time.sleep(10)
                 
                 elif status == 'PAUSED':
-                    # Dormir y volver a preguntar luego
-                    time.sleep(5)
+                    time.sleep(10)
                 
                 else:
-                    # Status desconocido
-                    time.sleep(5)
+                    time.sleep(10)
                     
             except Exception as e:
-                print(f"[LOG_MATRIZ] Error CRÍTICO en bucle principal: {e}")
-                time.sleep(5) # Prevenir bucle de error rápido
+                print(f"[MATRIZ] -> Error CRÍTICO en bucle principal: {e}")
+                time.sleep(10)
 
     def get_db_conn(self):
         """Obtiene una conexión dedicada para este hilo."""
@@ -70,11 +73,12 @@ class MatrixWorker(threading.Thread):
         """Devuelve temas 'PROCESANDO' a 'PENDIENTE' (Recovery Anti-Zombie)."""
         conn = self.get_db_conn()
         try:
+            # En un sistema real, chequearíamos timestamp, aquí reseteamos todo lo que quedó colgado
             conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE' WHERE status = 'PROCESANDO'")
             conn.commit()
-            print("[LOG_MATRIZ] Recuperación de Emergencia: Temas Zombie devueltos a la cola.")
+            print("[MATRIZ] -> Protocolo de Resurrección: Temas Zombie liberados.")
         except Exception as e:
-            print(f"[LOG_MATRIZ] Error en recuperación: {e}")
+            print(f"[MATRIZ] -> Error en recuperación: {e}")
         finally:
             conn.close()
 
@@ -107,68 +111,68 @@ class MatrixWorker(threading.Thread):
         finally:
             conn.close()
 
-    def get_api_key(self):
+    def get_config_values(self):
         conn = self.get_db_conn()
+        api_key = None
+        template = None
         try:
-            row = conn.execute("SELECT value FROM system_config WHERE key = 'gemini_api_key'").fetchone()
-            return row['value'] if row else None
+            row_key = conn.execute("SELECT value FROM system_config WHERE key = 'gemini_api_key'").fetchone()
+            row_tmpl = conn.execute("SELECT value FROM system_config WHERE key = 'matrix_prompt_template'").fetchone()
+            api_key = row_key['value'] if row_key else None
+            template = row_tmpl['value'] if row_tmpl else None
         finally:
             conn.close()
-            
-    def get_prompt_template(self):
-        conn = self.get_db_conn()
-        try:
-            row = conn.execute("SELECT value FROM system_config WHERE key = 'matrix_prompt_template'").fetchone()
-            return row['value'] if row else None
-        finally:
-            conn.close()
+        return api_key, template
 
-    def process_topic(self, topic):
-        """Orquesta la generación para un tema."""
+    def execute_sequential_process(self, topic):
+        """
+        Ejecuta el flujo atómico: Mark -> API -> Save.
+        """
         topic_id = topic['id']
         topic_name = topic['topic_name']
         category = topic.get('target_category', 'General')
         
-        # 1. Marcar como PROCESANDO (Independiente para bloqueo visual)
+        # --- FASE 1: BLOQUEO (DB) ---
+        print(f"[MATRIZ] -> Fase 1: Bloqueando tema {topic_id}...")
         self.update_topic_status(topic_id, 'PROCESANDO')
         
-        # 2. Obtener Credenciales y Config
-        api_key = self.get_api_key()
+        # Obtener config (Lectura rápida)
+        api_key, prompt_template = self.get_config_values()
+        
         if not api_key:
-            print("[LOG_MATRIZ] ERROR: No API Key found.")
-            # Si falta la Key, es un error de config, no tiene sentido reintentar inmediato
+            print("[MATRIZ] -> ERROR: No API Key found.")
             self.update_topic_status(topic_id, 'ERROR', "Falta API Key")
             return False
-            
-        prompt_template = self.get_prompt_template()
-        if not prompt_template:
-            prompt_template = "Genera 1 pregunta de opción múltiple sobre {topic_name} para médicos residentes. Formato JSON: enunciado, opciones, correcta, retroalimentacion."
 
-        # 3. Construir Prompt
+        if not prompt_template:
+            prompt_template = "Genera 5 preguntas de opción múltiple sobre {topic_name} para médicos residentes. Nivel Difícil. Formato JSON lista: enunciado, opciones, correcta, retroalimentacion."
+
+        # Modificación para forzar 5 preguntas si el template no lo especifica
+        # O confiar en el template del usuario. Asumimos el template del usuario o el default.
         final_prompt = prompt_template.format(topic_name=topic_name)
         
-        # 4. Llamar a Gemini (Sin DB Lock)
+        # --- FASE 2: GENERACIÓN (API - SIN DB) ---
+        print(f"[MATRIZ] -> Fase 2: Generando contenido con IA...")
         generated_data = self.call_gemini_api(api_key, final_prompt)
         
         if not generated_data:
-            # Fallo en API: Volver a PENDIENTE para reintentar luego
-            print(f"[LOG_MATRIZ] Fallo API. Reencolando tema: {topic_name}")
-            self.update_topic_status(topic_id, 'PENDIENTE', "Fallo API - Reintento")
+            print(f"[MATRIZ] -> Fallo API. Liberando tema...")
+            self.update_topic_status(topic_id, 'PENDIENTE', "Fallo API")
             return False
             
-        # Log de Telemetría solicitado
-        response_len = len(str(generated_data))
-        print(f"[LOG_MATRIZ] Respuesta API recibida (Longitud: {response_len} caracteres)")
-            
-        # 5. TRANSACCIÓN ATÓMICA FINAL (Guardar + Completar)
+        # --- FASE 3: PERSISTENCIA (DB - ATÓMICA) ---
+        print(f"[MATRIZ] -> Fase 3: Escribiendo en disco rígido...")
+        return self.save_results_atomic(topic_id, topic_name, category, generated_data)
+
+    def save_results_atomic(self, topic_id, topic_name, category, data):
         conn = self.get_db_conn()
         try:
             # Normalizar datos
-            data = generated_data if isinstance(generated_data, list) else [generated_data]
+            items = data if isinstance(data, list) else [data]
             count = 0
             
-            for q in data:
-                # Validar campos mínimos
+            for q in items:
+                # Validar campos
                 if not all(k in q for k in ('enunciado', 'opciones', 'correcta')):
                     continue
                 
@@ -188,26 +192,35 @@ class MatrixWorker(threading.Thread):
                     category, 
                     topic_name, 
                     datetime.datetime.now(),
-                    'Media'
+                    'Dificil'
                 ))
                 count += 1
             
             if count > 0:
                 conn.execute("UPDATE matrix_topics SET status = 'COMPLETADO' WHERE id = ?", (topic_id,))
-                conn.commit() # COMMIT FINAL (TODO O NADA)
-                print(f"[LOG_MATRIZ] ÉXITO: Transacción completada en disco. Inventario +{count}.")
+                conn.commit()
+                print(f"[MATRIZ] -> ÉXITO: {count} preguntas insertadas. Tema {topic_id} cerrado.")
                 return True
             else:
-                conn.rollback() # No guardar nada si no hay preguntas válidas
-                print(f"[LOG_MATRIZ] Datos inválidos en respuesta. Reencolando.")
-                self.update_topic_status(topic_id, 'PENDIENTE', "Datos inválidos (no sc guardaron)")
+                conn.rollback()
+                print(f"[MATRIZ] -> ERROR: Datos generados inválidos.")
+                # Revertir estado usando conexión separada o esta misma antes de cerrar?
+                # Como hicimos rollback, el estado sigue en PROCESANDO en la DB real (porque eso fue otra tx).
+                # Necesitamos llamar a update_topic_status externamente o ejecutarlo aquí.
+                # Ejecutémoslo aquí para aprovechar el catch/finally
+                conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = 'Datos Inválidos' WHERE id = ?", (topic_id,))
+                conn.commit()
                 return False
                 
         except Exception as e:
             conn.rollback()
-            print(f"[LOG_MATRIZ] Error transacción final: {e}")
-            # Error de base de datos podría ser temporal (Lock), reintentar
-            self.update_topic_status(topic_id, 'PENDIENTE', f"DB Error: {str(e)}")
+            print(f"[MATRIZ] -> Error Transacción DB: {e}")
+            # Intentar liberar el tema
+            try:
+                conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE' WHERE id = ?", (topic_id,))
+                conn.commit()
+            except:
+                pass
             return False
         finally:
             conn.close()
@@ -226,20 +239,20 @@ class MatrixWorker(threading.Thread):
         }
         
         try:
-            response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=30)
+            response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=60) # Timeout extendido
             if response.status_code == 200:
                 result = response.json()
                 try:
                     text_content = result['candidates'][0]['content']['parts'][0]['text']
                     return json.loads(text_content)
-                except (KeyError, json.JSONDecodeError, IndexError) as e:
-                    print(f"⚠️ [MATRIX] Error parseando respuesta JSON: {e}")
+                except Exception as e:
+                    print(f"[MATRIZ] -> Error JSON Parse: {e}")
                     return None
             else:
-                print(f"⚠️ [MATRIX] Error API {response.status_code}: {response.text}")
+                print(f"[MATRIZ] -> Error HTTP API: {response.status_code}")
                 return None
         except Exception as e:
-            print(f"⚠️ [MATRIX] Excepción de red: {e}")
+            print(f"[MATRIZ] -> Excepción Red: {e}")
             return None
 
     def update_topic_status(self, topic_id, new_status, error_msg=None):
