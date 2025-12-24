@@ -3064,6 +3064,12 @@ def render_matrix_admin():
             # Instanciar worker temporal
             debug_worker = matrix.MatrixWorker()
             
+            # --- DIAGNÓSTICO DE LLAVE ---
+            # Mostramos la llave en uso (máscara) para descartar que esté usando la vieja (vscode)
+            api_key_debug, _ = debug_worker.get_config_values()
+            masked_key = f"...{api_key_debug[-4:]}" if api_key_debug and len(api_key_debug) > 4 else "NO_SET"
+            st.code(f"🔑 API Key en uso: {masked_key}", language="text")
+            
             # Buscar tema
             topic = debug_worker.get_next_topic()
             

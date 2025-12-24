@@ -252,6 +252,14 @@ class MatrixWorker(threading.Thread):
             conn.close()
 
     def call_gemini_api(self, api_key, prompt):
+        # Lista de modelos de fallback en orden de preferencia
+        models_to_try = [
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash-001",
+            "gemini-pro"
+        ]
+        
         headers = {'Content-Type': 'application/json'}
         params = {'key': api_key}
         data = {
@@ -264,33 +272,60 @@ class MatrixWorker(threading.Thread):
             }
         }
         
-        try:
-            print("[MATRIZ] -> Enviando request a Gemini API...")
-            response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data, timeout=60)
+        last_error = None
+        
+        for model_name in models_to_try:
+            # Construir URL dinámica
+            current_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
             
-            if response.status_code == 200:
-                result = response.json()
-                try:
-                    text_content = result['candidates'][0]['content']['parts'][0]['text']
-                    
-                    # [DEBUG] LOGGING RAW ANSWER
-                    safe_preview = text_content[:200] + "..." if len(text_content) > 200 else text_content
-                    print(f"[MATRIZ] -> [DEBUG] Respuesta Cruda de API ({len(text_content)} chars): {safe_preview}")
-                    
-                    if not text_content.strip():
-                        print("[MATRIZ] -> ERROR: Respuesta vacía de la API.")
-                        return None, "Respuesta Vacía"
+            try:
+                print(f"[MATRIZ] -> Intentando con modelo: {model_name}...")
+                response = requests.post(current_url, headers=headers, params=params, json=data, timeout=60)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    try:
+                        if 'candidates' not in result:
+                            # Puede pasar si bloqueado por safety
+                            print(f"[MATRIZ] -> Respuesta válida pero sin 'candidates' (Safety?): {result}")
+                            return None, "Safety Block"
+
+                        text_content = result['candidates'][0]['content']['parts'][0]['text']
                         
-                    return json.loads(text_content), None
-                except Exception as e:
-                    print(f"[MATRIZ] -> Error JSON Parse: {e}. Contenido: {text_content[:100]}...")
-                    return None, f"JSON Error: {str(e)}"
-            else:
-                print(f"[MATRIZ] -> Error HTTP API: {response.status_code} - {response.text}")
-                return None, f"HTTP Error: {response.status_code}"
-        except Exception as e:
-            print(f"[MATRIZ] -> Excepción Red: {e}")
-            return None, f"Network Error: {str(e)}"
+                        # [DEBUG] LOGGING RAW ANSWER
+                        safe_preview = text_content[:200] + "..." if len(text_content) > 200 else text_content
+                        print(f"[MATRIZ] -> [DEBUG] Respuesta Cruda de API ({len(text_content)} chars): {safe_preview}")
+                        
+                        if not text_content.strip():
+                            print("[MATRIZ] -> ERROR: Respuesta vacía de la API.")
+                            return None, "Respuesta Vacía"
+                            
+                        return json.loads(text_content), None
+                    except Exception as e:
+                        print(f"[MATRIZ] -> Error JSON Parse ({model_name}): {e}")
+                        last_error = f"JSON Error: {str(e)}"
+                        # Si es error de JSON, quizás el modelo respondió mal, intentamos siguiente? 
+                        # No, JSON inválido es éxito de HTTP pero fallo de contenido. Mejor abortar o seguir?
+                        # Seguir con otro modelo podría arreglarlo.
+                        continue
+                        
+                elif response.status_code == 404:
+                    print(f"[MATRIZ] -> Modelo {model_name} no encontrado (404). Probando siguiente...")
+                    last_error = f"Model {model_name} 404"
+                    continue # Try next model
+                
+                else:
+                    # Otros errores (400, 403, 429) suelen ser fatales o requieren espera, no cambio de modelo.
+                    # Pero si es 429 quota, cambiar de modelo NO ayuda (la quota es por proyecto).
+                    print(f"[MATRIZ] -> Error HTTP API ({model_name}): {response.status_code} - {response.text}")
+                    return None, f"HTTP Error: {response.status_code}"
+            
+            except Exception as e:
+                print(f"[MATRIZ] -> Excepción Red ({model_name}): {e}")
+                last_error = f"Network Error: {str(e)}"
+                continue # Retry connection issue with next model? Maybe.
+
+        return None, last_error if last_error else "Todos los modelos fallaron"
 
     def update_topic_status(self, topic_id, new_status, error_msg=None):
         conn = self.get_db_conn()
