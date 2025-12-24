@@ -2,6 +2,7 @@ import time
 import threading
 import datetime
 import json
+import matrix_config
 import sqlite3
 import os
 import requests
@@ -139,9 +140,7 @@ class MatrixWorker(threading.Thread):
         finally:
             conn.close()
 
-import matrix_config
 
-# ... existing imports ...
 
     def get_next_topic(self):
         conn = self.get_db_conn()
