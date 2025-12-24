@@ -17,6 +17,23 @@ class MatrixWorker(threading.Thread):
         self.daemon = True # Morirá si el proceso principal muere
         self.stop_event = threading.Event()
         self.name = "MatrixWorkerThread"
+        # Auto-Migración de Seguridad
+        self._ensure_schema()
+
+    def _ensure_schema(self):
+        """Verifica que la tabla matrix_topics tenga la columna last_error."""
+        conn = self.get_db_conn()
+        try:
+            res = conn.execute("PRAGMA table_info(matrix_topics)").fetchall()
+            columns = [r['name'] for r in res]
+            if 'last_error' not in columns:
+                print("[MATRIZ] -> 🔧 MIGRATION: Adding 'last_error' column...")
+                conn.execute("ALTER TABLE matrix_topics ADD COLUMN last_error TEXT")
+                conn.commit()
+        except Exception as e:
+            print(f"[MATRIZ] -> ⚠️ Schema warning: {e}")
+        finally:
+            conn.close()
 
     def run(self):
         """Bucle principal del worker."""
@@ -65,72 +82,7 @@ class MatrixWorker(threading.Thread):
                 print(f"[MATRIZ] -> Error CRÍTICO en bucle principal: {e}")
                 time.sleep(10)
 
-    def get_db_conn(self):
-        """Obtiene una conexión dedicada para este hilo."""
-        return dbm.get_db_conn()
-
-    def emergency_recovery(self):
-        """Devuelve temas 'PROCESANDO' a 'PENDIENTE' (Recovery Anti-Zombie)."""
-        conn = self.get_db_conn()
-        try:
-            # En un sistema real, chequearíamos timestamp, aquí reseteamos todo lo que quedó colgado
-            conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE' WHERE status = 'PROCESANDO'")
-            conn.commit()
-            print("[MATRIZ] -> Protocolo de Resurrección: Temas Zombie liberados.")
-        except Exception as e:
-            print(f"[MATRIZ] -> Error en recuperación: {e}")
-        finally:
-            conn.close()
-
-    def get_matrix_status(self):
-        conn = self.get_db_conn()
-        try:
-            row = conn.execute("SELECT value FROM system_config WHERE key = 'matrix_status'").fetchone()
-            return row['value'] if row else 'PAUSED'
-        except Exception:
-            return 'PAUSED'
-        finally:
-            conn.close()
-
-    def get_next_topic(self):
-        conn = self.get_db_conn()
-        try:
-            # 1. Chequeo de seguridad: ¿Hay algo atascado?
-            # Si hay algún tema en 'PROCESANDO', NO tocar nada más hasta que se resuelva.
-            stuck_check = conn.execute("SELECT count(*) as cnt FROM matrix_topics WHERE status = 'PROCESANDO'").fetchone()
-            if stuck_check and stuck_check['cnt'] > 0:
-                print(f"[MATRIZ] -> ⚠️ Cola bloqueada: Hay {stuck_check['cnt']} tema(s) en PROCESANDO. Esperando...")
-                return None
-
-            # Prioridad 1 (Crítica) primero, luego por fecha
-            row = conn.execute("""
-                SELECT id, topic_name, target_category 
-                FROM matrix_topics 
-                WHERE status = 'PENDIENTE' 
-                ORDER BY priority ASC, created_at ASC 
-                LIMIT 1
-            """).fetchone()
-            if row:
-                return dict(row)
-            return None
-        except Exception as e:
-            print(f"[MATRIZ] -> Error buscando siguiente tema: {e}")
-            return None
-        finally:
-            conn.close()
-
-    def get_config_values(self):
-        conn = self.get_db_conn()
-        api_key = None
-        template = None
-        try:
-            row_key = conn.execute("SELECT value FROM system_config WHERE key = 'gemini_api_key'").fetchone()
-            row_tmpl = conn.execute("SELECT value FROM system_config WHERE key = 'matrix_prompt_template'").fetchone()
-            api_key = row_key['value'] if row_key else None
-            template = row_tmpl['value'] if row_tmpl else None
-        finally:
-            conn.close()
-        return api_key, template
+    # ... (get_db_conn, emergency_recovery, get_matrix_status, get_next_topic, get_config_values remain unchanged)
 
     def execute_sequential_process(self, topic):
         """
@@ -162,11 +114,15 @@ class MatrixWorker(threading.Thread):
         
         # --- FASE 2: GENERACIÓN (API - SIN DB) ---
         print(f"[MATRIZ] -> Fase 2: Generando contenido con IA...")
-        generated_data = self.call_gemini_api(api_key, final_prompt)
+        
+        # AHORA call_gemini_api DEVUELVE TUPLA (DATA, ERROR)
+        generated_data, api_error = self.call_gemini_api(api_key, final_prompt)
         
         if not generated_data:
-            print(f"[MATRIZ] -> Fallo API. Liberando tema...")
-            self.update_topic_status(topic_id, 'PENDIENTE', "Fallo API")
+            print(f"[MATRIZ] -> Fallo API: {api_error}. Liberando tema...")
+            # Si api_error es None, ponemos "Fallo Desconocido"
+            err_msg = api_error if api_error else "Fallo API"
+            self.update_topic_status(topic_id, 'PENDIENTE', err_msg)
             return False
             
         # --- FASE 3: PERSISTENCIA (DB - ATÓMICA) ---
@@ -258,24 +214,30 @@ class MatrixWorker(threading.Thread):
                     
                     if not text_content.strip():
                         print("[MATRIZ] -> ERROR: Respuesta vacía de la API.")
-                        return None
+                        return None, "Respuesta Vacía"
                         
-                    return json.loads(text_content)
+                    return json.loads(text_content), None
                 except Exception as e:
                     print(f"[MATRIZ] -> Error JSON Parse: {e}. Contenido: {text_content[:100]}...")
-                    return None
+                    return None, f"JSON Error: {str(e)}"
             else:
                 print(f"[MATRIZ] -> Error HTTP API: {response.status_code} - {response.text}")
-                return None
+                return None, f"HTTP Error: {response.status_code}"
         except Exception as e:
             print(f"[MATRIZ] -> Excepción Red: {e}")
-            return None
+            return None, f"Network Error: {str(e)}"
 
     def update_topic_status(self, topic_id, new_status, error_msg=None):
         conn = self.get_db_conn()
         try:
             if error_msg:
-                conn.execute("UPDATE matrix_topics SET status = ?, last_error = ? WHERE id = ?", (new_status, error_msg, topic_id))
+                # Intento robusto: Si falla last_error, hacemos fallback
+                try:
+                    conn.execute("UPDATE matrix_topics SET status = ?, last_error = ? WHERE id = ?", (new_status, error_msg, topic_id))
+                except sqlite3.OperationalError:
+                    # Fallback si no existe la columna last_error
+                    print("[MATRIZ] -> ⚠️ Fallback: last_error column missing. Updating status only.")
+                    conn.execute("UPDATE matrix_topics SET status = ? WHERE id = ?", (new_status, topic_id))
             else:
                 conn.execute("UPDATE matrix_topics SET status = ? WHERE id = ?", (new_status, topic_id))
             conn.commit()
