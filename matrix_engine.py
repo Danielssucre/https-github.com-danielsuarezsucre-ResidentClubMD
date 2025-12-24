@@ -9,7 +9,7 @@ import requests
 import database_manager as dbm
 
 # --- CONFIGURACIÓN ---
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
 MAX_RETRIES = 3
 
 class MatrixWorker(threading.Thread):
