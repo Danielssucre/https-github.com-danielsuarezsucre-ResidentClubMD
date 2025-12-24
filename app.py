@@ -3088,7 +3088,14 @@ def render_matrix_admin():
                     if success:
                         st.success(f"✅ ÉXITO: Tema {topic['id']} generado y guardado.")
                     else:
-                        st.error("❌ FALLO: Revisa la consola interna para el traceback.")
+                        # Recuperar el mensaje de error real de la base de datos
+                        conn_err = dbm.get_db_conn()
+                        err_row = conn_err.execute("SELECT last_error FROM matrix_topics WHERE id = ?", (topic['id'],)).fetchone()
+                        conn_err.close()
+                        
+                        real_error = err_row['last_error'] if err_row else "Error desconocido (Check logs)"
+                        st.error(f"❌ FALLO TÉCNICO: {real_error}")
+                        st.info("💡 Si dice 'Network Error' o 'HTTP', revisa tu API Key y cuotas.")
                 except Exception as e:
                     st.error(f"❌ EXCEPCIÓN: {e}")
                     st.code(traceback.format_exc(), language="python")
