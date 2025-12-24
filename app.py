@@ -2271,7 +2271,7 @@ def show_stats_page():
         LEFT JOIN 
             progress p ON u.username = p.username
         WHERE
-            u.role != 'admin' AND u.status = 'active'
+            u.role != 'admin' AND u.status = 'active' AND u.username != 'guest_mode'
         GROUP BY
             u.username, u.is_resident, u.is_reference_model
     """
@@ -4507,6 +4507,19 @@ def main():
             "rules": show_rules_page,
         }
         
+        
+        # --- ROUTER LOGIC AUDIT: GUEST MODE ---
+        if st.session_state.get('user_role') == 'guest':
+            # Definir lista blanca de páginas permitidas para invitados
+            allowed_guest_pages = ["evaluacion", "rules"]
+            current_pg = st.session_state.get("current_page", "evaluacion")
+            
+            if current_pg not in allowed_guest_pages:
+                # Redirección forzosa al Dashboard de Invitado (Evaluación)
+                st.session_state.current_page = "evaluacion"
+                # Opcional: st.toast("Redirigiendo a zona permitida...")
+                st.rerun()
+
         page_to_show = page_functions.get(st.session_state.get("current_page", "evaluacion"), show_evaluation_page)
         page_to_show()
 
