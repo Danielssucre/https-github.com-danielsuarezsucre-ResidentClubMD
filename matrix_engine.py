@@ -254,6 +254,7 @@ class MatrixWorker(threading.Thread):
     def call_gemini_api(self, api_key, prompt):
         # Lista de modelos de fallback en orden de preferencia
         models_to_try = [
+            "gemini-2.5-flash-lite", # Solicitado por usuario (Preview/Experimental)
             "gemini-1.5-flash",
             "gemini-1.5-flash-latest",
             "gemini-1.5-flash-001",
