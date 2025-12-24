@@ -1778,11 +1778,12 @@ def render_question_card(question_id):
             for op in parsed_options
         ]
     
-    # Identificar la respuesta correcta con su nuevo prefijo
-    correct_option_original_text = pregunta['correcta'].strip()
+    # Identificar la respuesta correcta con su nuevo prefijo (Matching Robusto)
+    correct_option_original_text = clean_ai_prefixes(pregunta['correcta'].strip())
     correct_option_with_prefix = ""
     for i, op in enumerate(parsed_options):
-        if op.strip() == correct_option_original_text:
+        # Usamos limpieza en ambos lados para maximizar el "Hit Rate"
+        if clean_ai_prefixes(op.strip()) == correct_option_original_text:
             correct_option_with_prefix = original_options_with_prefix[i]
             break
 
@@ -1874,12 +1875,19 @@ def render_question_card(question_id):
         respuesta_usuario = st.session_state.get(user_answer_key)
         
         # Mostrar opciones con feedback visual
+        # Mostrar opciones con feedback visual (Lógica Priorizada)
         for op in display_options:
-            if op == correct_option_with_prefix:
+            is_correct = (op == correct_option_with_prefix)
+            is_selected = (op == respuesta_usuario)
+            
+            if is_correct:
+                # 1. Estado de Éxito Global: SIEMPRE Verde si es la correcta
                 st.success(f"**{op} (Correcta)**")
-            elif op == respuesta_usuario:
+            elif is_selected:
+                # 2. Estado de Error: Solo si fue seleccionada y NO es correcta (implícito por elif)
                 st.error(f"**{op} (Tu respuesta)**")
             else:
+                # 3. Estado Neutro
                 st.write(op)
         
         st.info(f"**Retroalimentación:**\n{pregunta['retroalimentacion']}")
