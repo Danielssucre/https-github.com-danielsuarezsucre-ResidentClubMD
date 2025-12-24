@@ -21,15 +21,31 @@ class MatrixWorker(threading.Thread):
         self._ensure_schema()
 
     def _ensure_schema(self):
-        """Verifica que la tabla matrix_topics tenga la columna last_error."""
+        """Verifica que las tablas necesarias tengan las columnas requeridas (Migración Automática)."""
         conn = self.get_db_conn()
         try:
+            # 1. Tabla matrix_topics: last_error
             res = conn.execute("PRAGMA table_info(matrix_topics)").fetchall()
             columns = [r['name'] for r in res]
             if 'last_error' not in columns:
-                print("[MATRIZ] -> 🔧 MIGRATION: Adding 'last_error' column...")
+                print("[MATRIZ] -> 🔧 MIGRATION: Adding 'last_error' column to matrix_topics...")
                 conn.execute("ALTER TABLE matrix_topics ADD COLUMN last_error TEXT")
                 conn.commit()
+
+            # 2. Tabla questions: difficulty, ai_generated
+            res_q = conn.execute("PRAGMA table_info(questions)").fetchall()
+            columns_q = [r['name'] for r in res_q]
+            
+            if 'difficulty' not in columns_q:
+                print("[MATRIZ] -> 🔧 MIGRATION: Adding 'difficulty' column to questions...")
+                conn.execute("ALTER TABLE questions ADD COLUMN difficulty TEXT DEFAULT 'Media'")
+                conn.commit()
+                
+            if 'ai_generated' not in columns_q:
+                print("[MATRIZ] -> 🔧 MIGRATION: Adding 'ai_generated' column to questions...")
+                conn.execute("ALTER TABLE questions ADD COLUMN ai_generated INTEGER DEFAULT 0")
+                conn.commit()
+                
         except Exception as e:
             print(f"[MATRIZ] -> ⚠️ Schema warning: {e}")
         finally:
