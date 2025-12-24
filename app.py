@@ -3121,24 +3121,27 @@ def render_matrix_admin():
     c1, c2, c3 = st.columns(3)
     if c1.button("▶️ INICIAR PROCESO", use_container_width=True):
         dbm.run_atomic_query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'ACTIVE')")
-        # conn_status.commit() <- ELIMINADO: Ya usamos atomic query
         st.success('🚀 Modo Industrial Activado (Lógica ADN)')
         time.sleep(1); st.rerun()
+        
     if c2.button("⏯️ PROCESAR SOLO SELECCIONADO", use_container_width=True):
         if selected_target_id:
-            conn_status.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'ONCE_SPECIFIC')")
-            conn_status.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_target_id', ?)", (str(selected_target_id),))
-            conn_status.commit()
+            # Atomic para mult-statement es posible, pero aquí lo haremos en dos pasos o uno compuesto
+            # Mejor usar atomic_query para cada uno o una función helper, pero para seguridad run_atomic abre y cierra.
+            dbm.run_atomic_query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'ONCE_SPECIFIC')")
+            dbm.run_atomic_query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_target_id', ?)", (str(selected_target_id),))
             st.success(f'🎯 Orden enviada: Procesar ID {selected_target_id} y pausar')
             time.sleep(1); st.rerun()
         else:
             st.warning("⚠️ Selecciona un tema primero.")
+            
     if c3.button("⏸️ PAUSA TOTAL", use_container_width=True):
-        conn_status.execute("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'PAUSED')")
-        conn_status.commit()
+        dbm.run_atomic_query("INSERT OR REPLACE INTO system_config (key, value) VALUES ('matrix_status', 'PAUSED')")
+        # Forzamos kill switch en workers si fuera necesario (pero leen la config)
         st.success('🛑 Deteniendo maquinaria...')
         time.sleep(1); st.rerun()
-    conn_status.close()
+    
+    # conn_status ya fue cerrado arriba, no intentarlo cerrar de nuevo
     st.markdown("---")
     # --- FIN: Panel de Control del Núcleo ---
 
