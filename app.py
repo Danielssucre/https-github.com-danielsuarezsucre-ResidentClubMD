@@ -1554,11 +1554,7 @@ def show_create_page():
 # DEFINICIÓN MAESTRA DEL GOLDEN RATIO (Sin tildes para compatibilidad)
 # GOLDEN_RATIO_DETAILED moved to fsrs_engine.py
 
-def get_next_question_for_user(username, practice_mode=False):
-    """
-    Delegada al motor FSRS v5 (Modularizado).
-    """
-    return fsrs.get_next_question_for_user(username, practice_mode)
+# Wrapper eliminado: get_next_question_for_user ahora se importa directamente de fsrs_engine
 
 
 def update_srs(conn, username, question_id, difficulty_rating):
