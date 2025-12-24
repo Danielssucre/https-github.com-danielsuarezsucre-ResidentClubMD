@@ -262,10 +262,10 @@ class MatrixWorker(threading.Thread):
         generated_data, api_error = self.call_gemini_api(api_key, final_prompt)
         
         if not generated_data:
-            print(f"[MATRIZ] -> Fallo API: {api_error}. Liberando tema...")
-            # Si api_error es None, ponemos "Fallo Desconocido"
+            print(f"[MATRIZ] -> Fallo API: {api_error}. Abortando para evitar bucle de costos...")
+            # FINOPS SAFEGUARD: Usamos 'ERROR' para detener reintentos infinitos
             err_msg = api_error if api_error else "Fallo API"
-            self.update_topic_status(topic_id, 'PENDIENTE', err_msg)
+            self.update_topic_status(topic_id, 'ERROR', err_msg)
             return False
             
         # --- FASE 3: PERSISTENCIA (DB - ATÓMICA) ---
@@ -312,7 +312,8 @@ class MatrixWorker(threading.Thread):
             else:
                 conn.rollback()
                 print(f"[MATRIZ] -> ERROR: Datos generados inválidos.")
-                conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = 'Datos Inválidos' WHERE id = ?", (topic_id,))
+                # FINOPS SAFEGUARD: 'ERROR' stops the bleeding
+                conn.execute("UPDATE matrix_topics SET status = 'ERROR', last_error = 'Datos Inválidos (JSON Key Missing)' WHERE id = ?", (topic_id,))
                 conn.commit()
                 return False
                 
@@ -322,7 +323,8 @@ class MatrixWorker(threading.Thread):
             # Intentar liberar el tema y guardar el error
             try:
                 # Usamos str(e) para guardar el mensaje de excepción en la DB
-                conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = ? WHERE id = ?", (f"DB Error: {str(e)}", topic_id))
+                # FINOPS SAFEGUARD: 'ERROR' status
+                conn.execute("UPDATE matrix_topics SET status = 'ERROR', last_error = ? WHERE id = ?", (f"DB Error: {str(e)}", topic_id))
                 conn.commit()
             except:
                 pass
@@ -331,13 +333,10 @@ class MatrixWorker(threading.Thread):
             conn.close()
 
     def call_gemini_api(self, api_key, prompt):
-        # Lista de modelos de fallback en orden de preferencia
+        # Lista de modelos: SOLO Flash-Lite para ahorro máximo. 
+        # Si falla, fallamos. No hay fallback a Pro ($$$).
         models_to_try = [
-            "gemini-2.5-flash-lite", # Solicitado por usuario (Preview/Experimental)
-            "gemini-1.5-flash",
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-flash-001",
-            "gemini-pro"
+            "gemini-2.0-flash-lite" 
         ]
         
         headers = {'Content-Type': 'application/json'}
