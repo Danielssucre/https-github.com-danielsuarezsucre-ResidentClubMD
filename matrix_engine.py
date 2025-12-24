@@ -45,6 +45,20 @@ class MatrixWorker(threading.Thread):
                 print("[MATRIZ] -> 🔧 MIGRATION: Adding 'ai_generated' column to questions...")
                 conn.execute("ALTER TABLE questions ADD COLUMN ai_generated INTEGER DEFAULT 0")
                 conn.commit()
+            
+            # 3. Usuario del Sistema: Matrix_AI (Para Foreign Key constraints)
+            # tables referenced by questions(owner_username) -> users(username)
+            user_check = conn.execute("SELECT username FROM users WHERE username = 'Matrix_AI'").fetchone()
+            if not user_check:
+                print("[MATRIZ] -> 🔧 MIGRATION: Creating System User 'Matrix_AI'...")
+                # Asumimos password dummy o null si esquema lo permite, o usamos un hash fijo
+                # Insertamos solo campos obligatorios. Asumimos username, password_hash, role
+                try:
+                    conn.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", 
+                                 ('Matrix_AI', 'SYSTEM_ACCOUNT_NO_LOGIN', 'admin'))
+                    conn.commit()
+                except Exception as e_user:
+                    print(f"[MATRIZ] -> ⚠️ Error creando usuario sistema: {e_user}")
                 
         except Exception as e:
             print(f"[MATRIZ] -> ⚠️ Schema warning: {e}")
