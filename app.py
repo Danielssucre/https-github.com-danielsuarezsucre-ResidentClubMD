@@ -22,6 +22,7 @@ import auth_handler as auth
 import ui_components as ui
 from fsrs_engine import FSRS_v5_Engine, get_next_question_for_user
 import matrix_engine as matrix # Nuevo módulo Worker
+from matrix_config import GOLDEN_RATIO_DETAILED # Configuración de pesos clínicos
 
 def clean_ai_prefixes(text):
     """
