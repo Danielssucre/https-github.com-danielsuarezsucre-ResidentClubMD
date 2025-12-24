@@ -157,7 +157,8 @@ class MatrixWorker(threading.Thread):
 
         # Modificación para forzar 5 preguntas si el template no lo especifica
         # O confiar en el template del usuario. Asumimos el template del usuario o el default.
-        final_prompt = prompt_template.format(topic_name=topic_name)
+        # USAMOS .replace() en lugar de .format() para evitar KeyError si el prompt tiene JSON brackets {}
+        final_prompt = prompt_template.replace("{topic_name}", topic_name)
         
         # --- FASE 2: GENERACIÓN (API - SIN DB) ---
         print(f"[MATRIZ] -> Fase 2: Generando contenido con IA...")
