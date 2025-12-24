@@ -139,17 +139,65 @@ class MatrixWorker(threading.Thread):
         finally:
             conn.close()
 
+import matrix_config
+
+# ... existing imports ...
+
     def get_next_topic(self):
         conn = self.get_db_conn()
         try:
             # 1. Chequeo de seguridad: ¿Hay algo atascado?
-            # Si hay algún tema en 'PROCESANDO', NO tocar nada más hasta que se resuelva.
             stuck_check = conn.execute("SELECT count(*) as cnt FROM matrix_topics WHERE status = 'PROCESANDO'").fetchone()
             if stuck_check and stuck_check['cnt'] > 0:
                 print(f"[MATRIZ] -> ⚠️ Cola bloqueada: Hay {stuck_check['cnt']} tema(s) en PROCESANDO. Esperando...")
                 return None
+            
+            # --- LÓGICA BLUEPRINT CLÍNICO (Deficit-Based) ---
+            print("[MATRIZ] -> Calculando déficits clínicos...")
+            
+            # 2. Obtener conteo actual por categoría
+            current_counts = {}
+            rows = conn.execute("SELECT tag_categoria, COUNT(*) as cnt FROM questions GROUP BY tag_categoria").fetchall()
+            for r in rows:
+                current_counts[r['tag_categoria']] = r['cnt']
+                
+            # 3. Calcular Déficit para cada especialidad
+            deficits = []
+            target_size = matrix_config.TARGET_BANK_SIZE
+            golden_ratio = matrix_config.GOLDEN_RATIO_DETAILED
+            
+            for specialty, weight in golden_ratio.items():
+                target_count = (target_size * weight) / 100
+                current_count = current_counts.get(specialty, 0)
+                deficit = target_count - current_count
+                deficits.append({'specialty': specialty, 'deficit': deficit})
+            
+            # Ordenar por mayor déficit (descendente)
+            deficits.sort(key=lambda x: x['deficit'], reverse=True)
+            
+            # 4. Buscar tema disponible priorizando el mayor déficit
+            for item in deficits:
+                specialty = item['specialty']
+                if item['deficit'] <= 0:
+                    continue # Ya cumplimos la cuota, saltar
+                
+                # Buscar UN tema pendiente de esta especialidad
+                # Usamos target_category que debe coincidir con el nombre de la especialidad
+                row = conn.execute("""
+                    SELECT id, topic_name, target_category 
+                    FROM matrix_topics 
+                    WHERE status = 'PENDIENTE' AND target_category = ?
+                    ORDER BY priority ASC, created_at ASC
+                    LIMIT 1
+                """, (specialty,)).fetchone()
+                
+                if row:
+                    print(f"[MATRIZ] -> Prioridad Clínica Encontrada: {specialty} (Déficit: {item['deficit']:.1f})")
+                    return dict(row)
 
-            # Prioridad 1 (Crítica) primero, luego por fecha
+            # 5. Fallback: Si no hay temas de las especialidades con déficit,
+            # tomamos cualquiera por prioridad estándar (llenar huecos o temas sin categoría definida)
+            print("[MATRIZ] -> No se encontraron temas específicos para cubrir déficits. Usando Fallback General.")
             row = conn.execute("""
                 SELECT id, topic_name, target_category 
                 FROM matrix_topics 
@@ -160,6 +208,7 @@ class MatrixWorker(threading.Thread):
             if row:
                 return dict(row)
             return None
+            
         except Exception as e:
             print(f"[MATRIZ] -> Error buscando siguiente tema: {e}")
             return None
