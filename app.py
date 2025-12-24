@@ -1738,8 +1738,20 @@ def render_question_card(question_id):
              raise ValueError("Al menos una de las opciones está vacía.")
              
     except (ValueError, TypeError, KeyError) as e:
-        st.error(f"Datos de pregunta corruptos (ID: {question_id}). Un administrador debería revisarla. Saltando pregunta.")
+        st.error(f"Datos de pregunta corruptos (ID: {question_id}). Un administrador debería revisarla.")
         st.caption(f"Detalle técnico: {e}")
+        
+        # --- FIX: Botón de Auto-Limpieza para Admin ---
+        if st.session_state.get('user_role') == 'admin':
+            if st.button("🗑️ Eliminar Pregunta Corrupta", key=f"del_corrupt_{question_id}", type="primary"):
+                conn = get_db_conn()
+                conn.execute("DELETE FROM questions WHERE id = ?", (question_id,))
+                conn.commit()
+                conn.close()
+                st.success("Pregunta eliminada.")
+                time.sleep(1)
+                st.rerun()
+        
         return True # Devuelve True para que show_evaluation_page pida la siguiente.
 
     # --- LÓGICA DE ANCLAJE INTELIGENTE (MODIFICADO) ---
