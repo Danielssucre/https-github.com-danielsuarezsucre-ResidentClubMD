@@ -57,8 +57,24 @@ def get_db_conn():
 
 # --- MATRIX WORKER BOOTSTRAP (SINGLETON) ---
 @st.cache_resource
+def ensure_matrix_schema():
+    conn = get_db_conn()
+    try:
+        # Check if 'last_error' column exists
+        res = conn.execute("PRAGMA table_info(matrix_topics)").fetchall()
+        columns = [r['name'] for r in res]
+        if 'last_error' not in columns:
+            print("🔧 [MIGRATION] Adding 'last_error' column to matrix_topics...")
+            conn.execute("ALTER TABLE matrix_topics ADD COLUMN last_error TEXT")
+            conn.commit()
+    except Exception as e:
+        print(f"⚠️ Schema warning: {e}")
+    finally:
+        conn.close()
+
 def bootstrap_matrix():
     """Arranque seguro del hilo de La Matriz."""
+    ensure_matrix_schema()
     matrix.start_matrix_worker()
 
 # Lanzar inmediatamente al cargar el script (st.cache_resource evita duplicados)
