@@ -82,7 +82,72 @@ class MatrixWorker(threading.Thread):
                 print(f"[MATRIZ] -> Error CRÍTICO en bucle principal: {e}")
                 time.sleep(10)
 
-    # ... (get_db_conn, emergency_recovery, get_matrix_status, get_next_topic, get_config_values remain unchanged)
+    def get_db_conn(self):
+        """Obtiene una conexión dedicada para este hilo."""
+        return dbm.get_db_conn()
+
+    def emergency_recovery(self):
+        """Devuelve temas 'PROCESANDO' a 'PENDIENTE' (Recovery Anti-Zombie)."""
+        conn = self.get_db_conn()
+        try:
+            # En un sistema real, chequearíamos timestamp, aquí reseteamos todo lo que quedó colgado
+            conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE' WHERE status = 'PROCESANDO'")
+            conn.commit()
+            print("[MATRIZ] -> Protocolo de Resurrección: Temas Zombie liberados.")
+        except Exception as e:
+            print(f"[MATRIZ] -> Error en recuperación: {e}")
+        finally:
+            conn.close()
+
+    def get_matrix_status(self):
+        conn = self.get_db_conn()
+        try:
+            row = conn.execute("SELECT value FROM system_config WHERE key = 'matrix_status'").fetchone()
+            return row['value'] if row else 'PAUSED'
+        except Exception:
+            return 'PAUSED'
+        finally:
+            conn.close()
+
+    def get_next_topic(self):
+        conn = self.get_db_conn()
+        try:
+            # 1. Chequeo de seguridad: ¿Hay algo atascado?
+            # Si hay algún tema en 'PROCESANDO', NO tocar nada más hasta que se resuelva.
+            stuck_check = conn.execute("SELECT count(*) as cnt FROM matrix_topics WHERE status = 'PROCESANDO'").fetchone()
+            if stuck_check and stuck_check['cnt'] > 0:
+                print(f"[MATRIZ] -> ⚠️ Cola bloqueada: Hay {stuck_check['cnt']} tema(s) en PROCESANDO. Esperando...")
+                return None
+
+            # Prioridad 1 (Crítica) primero, luego por fecha
+            row = conn.execute("""
+                SELECT id, topic_name, target_category 
+                FROM matrix_topics 
+                WHERE status = 'PENDIENTE' 
+                ORDER BY priority ASC, created_at ASC 
+                LIMIT 1
+            """).fetchone()
+            if row:
+                return dict(row)
+            return None
+        except Exception as e:
+            print(f"[MATRIZ] -> Error buscando siguiente tema: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def get_config_values(self):
+        conn = self.get_db_conn()
+        api_key = None
+        template = None
+        try:
+            row_key = conn.execute("SELECT value FROM system_config WHERE key = 'gemini_api_key'").fetchone()
+            row_tmpl = conn.execute("SELECT value FROM system_config WHERE key = 'matrix_prompt_template'").fetchone()
+            api_key = row_key['value'] if row_key else None
+            template = row_tmpl['value'] if row_tmpl else None
+        finally:
+            conn.close()
+        return api_key, template
 
     def execute_sequential_process(self, topic):
         """
