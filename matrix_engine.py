@@ -9,7 +9,7 @@ import requests
 import database_manager as dbm
 
 # --- CONFIGURACIÓN ---
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
 MAX_RETRIES = 3
 
 class MatrixWorker(threading.Thread):
@@ -333,10 +333,9 @@ class MatrixWorker(threading.Thread):
             conn.close()
 
     def call_gemini_api(self, api_key, prompt):
-        # Lista de modelos: SOLO Flash-Lite para ahorro máximo. 
-        # Si falla, fallamos. No hay fallback a Pro ($$$).
+        # Lista de modelos: SOLO Flash-Lite (v2.5) para ahorro máximo. 
         models_to_try = [
-            "gemini-2.0-flash-lite" 
+            "gemini-2.5-flash-lite" 
         ]
         
         headers = {'Content-Type': 'application/json'}
