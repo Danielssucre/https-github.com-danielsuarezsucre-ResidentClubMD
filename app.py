@@ -3799,8 +3799,9 @@ def show_admin_panel():
 
         # --- 1. SECCIÓN: GESTIONAR USUARIOS ACTIVOS ---
         
+        # Filtramos admin_user Y el usuario del sistema 'Matrix_AI'
         usuarios_activos = conn.execute(
-            "SELECT username, role, is_approved, is_intensive, max_inactivity_days, status, is_reference_model, admitted_status, admitted_specialty, final_accuracy_snapshot, avg_daily_questions, avg_seconds_per_question, total_questions_snapshot, access_expiration FROM users WHERE username != ? AND status = 'active'", 
+            "SELECT username, role, is_approved, is_intensive, max_inactivity_days, status, is_reference_model, admitted_status, admitted_specialty, final_accuracy_snapshot, avg_daily_questions, avg_seconds_per_question, total_questions_snapshot, access_expiration FROM users WHERE username != ? AND username != 'Matrix_AI' AND status = 'active'", 
             (admin_user,)
         ).fetchall()
 
