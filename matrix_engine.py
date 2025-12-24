@@ -241,9 +241,10 @@ class MatrixWorker(threading.Thread):
         except Exception as e:
             conn.rollback()
             print(f"[MATRIZ] -> Error Transacción DB: {e}")
-            # Intentar liberar el tema
+            # Intentar liberar el tema y guardar el error
             try:
-                conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE' WHERE id = ?", (topic_id,))
+                # Usamos str(e) para guardar el mensaje de excepción en la DB
+                conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = ? WHERE id = ?", (f"DB Error: {str(e)}", topic_id))
                 conn.commit()
             except:
                 pass
