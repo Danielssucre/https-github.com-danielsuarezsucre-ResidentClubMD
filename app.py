@@ -20,7 +20,7 @@ import traceback
 import database_manager as dbm
 import auth_handler as auth
 import ui_components as ui
-import fsrs_engine as fsrs
+from fsrs_engine import FSRS_v5_Engine, get_next_question_for_user
 import matrix_engine as matrix # Nuevo módulo Worker
 
 def clean_ai_prefixes(text):
