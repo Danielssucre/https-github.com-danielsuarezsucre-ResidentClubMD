@@ -4215,6 +4215,50 @@ def show_admin_panel():
         except Exception as e:
             st.error(f"Ocurrió un error al generar el dataset para descarga: {e}")
 
+        # --- 4. ZONA DE PELIGRO (Admin Only) ---
+        st.markdown("---")
+        with st.expander("💀 Zona de Peligro: Vaciado de Banco", icon="☢️"):
+            st.warning("⚠️ ESTA ACCIÓN ES IRREVERSIBLE. Se eliminarán TODAS las preguntas generadas.")
+            
+            # Doble verificación de rol (aunque render_admin_panel ya debería filtrar)
+            if st.session_state.get('user_role') == 'admin':
+                with st.form("danger_zone_form"):
+                    st.write("Para confirmar, escribe la frase de seguridad: **BORRAR TODO**")
+                    safety_phrase = st.text_input("Frase de Seguridad", placeholder="Escribe aquí...")
+                    
+                    # Opcional: Resetear también los temas
+                    reset_topics = st.checkbox("Reiniciar estado de Temas a 'PENDIENTE' (Para regenerar)", value=False)
+                    
+                    if st.form_submit_button("💥 EJECUTAR VACIADO TOTAL", type="primary"):
+                        if safety_phrase == "BORRAR TODO":
+                            conn_nuke = get_db_conn()
+                            try:
+                                # 1. Borrar Preguntas
+                                conn_nuke.execute("DELETE FROM questions")
+                                deleted_rows = conn_nuke.total_changes
+                                
+                                # 2. Resetear Temas (Opcional)
+                                if reset_topics:
+                                    conn_nuke.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = NULL")
+                                
+                                # 3. Log de Auditoría
+                                conn_nuke.execute(
+                                    "INSERT INTO activity_log (username, action_type, metadata, timestamp) VALUES (?, ?, ?, ?)",
+                                    (st.session_state.current_user, 'NUCLEAR_RESET', json.dumps({'deleted_questions': deleted_rows, 'reset_topics': reset_topics}), datetime.datetime.now())
+                                )
+                                conn_nuke.commit()
+                                st.success(f"☢️ SISTEMA PURGADO. {deleted_rows} preguntas eliminadas.")
+                                time.sleep(2)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error crítico durante el vaciado: {e}")
+                            finally:
+                                conn_nuke.close()
+                        else:
+                            st.error("⛔ Frase de seguridad incorrecta. No se hizo nada.")
+            else:
+                st.error("Espacio restringido a Super-Admin.")
+
     with tab_stress:
         st.header("🧪 Test de Estrés MAFU 2.0 (Simulación de Carga)")
         st.info("Esta herramienta audita la integridad del Algoritmo de Selección y la estructura de la Base de Datos.")
