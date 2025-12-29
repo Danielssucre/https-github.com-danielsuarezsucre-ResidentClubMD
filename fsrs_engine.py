@@ -64,138 +64,57 @@ GOLDEN_RATIO_DETAILED = {
     'Vascular': 3
 }
 
-def get_next_question_for_user(username, practice_mode=False): # practice_mode es ahora ignorado
+def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO'): # practice_mode es ignorado, study_mode es el nuevo rey
     """
-    Obtiene la próxima pregunta para el usuario, fusionando Evaluación y Práctica en un Flujo Infinito.
-    También soporta el modo de práctica por temas de la Biblioteca como una entrada prioritaria.
+    Obtiene la próxima pregunta según el Modo de Estudio. (Reingeniería Segmentada)
     
-    Jerarquía del Flujo Infinito:
-    1. Vencidas/Nuevas -> 2. Adelantos Futuros -> 3. Aleatorio (Respaldo).
-    
-    Devuelve un diccionario {'id': question_id, 'is_advance': bool} o None si no hay preguntas.
+    study_mode:
+      - 'REVIEW': Solo repaso (due_date <= hoy)
+      - 'LEARN': Solo nuevas (sin progress)
+      - 'AUTO': Flujo infinito original (mezcla inteligente)
+      
+    Devuelve un diccionario {'id': question_id, 'is_advance': bool} o None.
     """
     conn = dbm.get_db_conn()
     cursor = conn.cursor()
     today = datetime.date.today()
 
     try:
-        # --- MODO PRIORITARIO: Práctica por Tema (de la Biblioteca) ---
-        # Se mantiene esta funcionalidad ya que es una selección explícita del usuario
+        # --- A. MODO PRÁCTICA (BIBLIOTECA) ---
+        # Prioridad absoluta si el usuario eligió un tema específico
         if st.session_state.get('practice_mode'):
             practice_question = None
+            # ... (Lógica de práctica existente se mantiene igual, omitiendo por brevedad en reemplazo si no se toca)
+            # COPIAR LOGICA EXISTENTE DE PRÁCTICA AQUÍ (Simplificando el patch para no borrarla)
+            # Como la herramienta replace reemplaza TODO el bloque, debo incluir la lógica de práctica.
             
-            # Caso A: Tag Único (Legacy o específico)
+            # Caso A: Tag Único
             if st.session_state.get('selected_tag'):
                 tag = st.session_state.selected_tag
-                cursor.execute(
-                    "SELECT id FROM questions WHERE tag_tema = ? AND status = 'active' ORDER BY RANDOM() LIMIT 1",
-                    (tag,)
-                )
+                cursor.execute("SELECT id FROM questions WHERE tag_tema = ? AND status = 'active' ORDER BY RANDOM() LIMIT 1", (tag,))
                 practice_question = cursor.fetchone()
-                
-            # Caso B: Especialidad Completa (Dinámica y Escalable)
+            # Caso B: Especialidad
             elif st.session_state.get('practice_specialty'):
                 specialty = st.session_state.practice_specialty
-                # --- AUDITORIA: Filtro de exclusión de sesión ---
                 answered_ids = st.session_state.get('session_answered_ids', [])
                 
-                # Normalización en Caliente: WHERE LOWER(tag_categoria) LIKE LOWER('Neurolog%')
-                # Generamos el patrón de búsqueda (ej: "neurolog%")
                 clean_spec = specialty.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
-                # Heurística: Tomar los primeros 6 caracteres si es largo, o todo si es corto
                 search_root = clean_spec[:6] if len(clean_spec) > 6 else clean_spec
                 search_pattern = f"{search_root}%"
                 
                 params = [search_pattern]
                 exclude_clause = ""
-                
                 if answered_ids:
                     placeholders_exclude = ','.join(['?'] * len(answered_ids))
                     exclude_clause = f"AND id NOT IN ({placeholders_exclude})"
                     params.extend(answered_ids)
                 
-                # Consulta simplificada y directa a la categoría (Herencia Automática)
-                # FIX: Usar ORM o query segura
                 query = f"SELECT id FROM questions WHERE LOWER(tag_categoria) LIKE ? {exclude_clause} AND status = 'active' ORDER BY RANDOM() LIMIT 1"
                 cursor.execute(query, params)
                 practice_question = cursor.fetchone()
 
             if practice_question:
                 return {'id': practice_question['id'], 'is_advance': False}
-            
-            # Si estamos en modo práctica pero no hay pregunta, retornamos None
-            return None
-
-        # --- Paso A: Detectar Modo de Usuario & Intensivo ---
-        try:
-            # Se agrega is_intensive al SELECT
-            user_row = cursor.execute("SELECT strategy_mode, is_intensive FROM users WHERE username = ?", (username,)).fetchone()
-            strategy_mode = user_row['strategy_mode'] if user_row else 'STANDARD'
-            # Si es None o 0 se toma como False
-            is_intensive = bool(user_row['is_intensive']) if (user_row and user_row['is_intensive']) else False
-        except Exception:
-            strategy_mode = 'STANDARD'
-            is_intensive = False
-
-        # Lógica Maestra: Es MAFU si tiene el modo explícito O si es Intensivo
-        use_mafu_logic = (strategy_mode == 'MAFU') or is_intensive
-
-        # --- Paso B: Lógica MAFU (Si mode == 'MAFU') ---
-        if use_mafu_logic:
-            # B1. Deuda de Memoria (FSRS)
-            # Busca en tabla progress donde due_date <= hoy. Ordena por due_date ASC.
-            query_debt = """
-                SELECT q.id
-                FROM questions q
-                JOIN progress p ON q.id = p.question_id
-                WHERE p.username = ? AND q.status = 'active' AND p.due_date <= ?
-                ORDER BY p.due_date ASC
-                LIMIT 1
-            """
-            cursor.execute(query_debt, (username, today))
-            question = cursor.fetchone()
-            if question:
-                return {'id': question['id'], 'is_advance': False}
-
-            # B2. Avance Fractal (Material Nuevo)
-            # Usa random.choices usando los pesos de GOLDEN_RATIO_DETAILED.
-            topics = list(GOLDEN_RATIO_DETAILED.keys())
-            weights = list(GOLDEN_RATIO_DETAILED.values())
-            selected_topic = random.choices(topics, weights=weights, k=1)[0]
-
-            query_new_base = """
-                SELECT q.id 
-                FROM questions q
-                LEFT JOIN progress p ON q.id = p.question_id AND p.username = ?
-                WHERE q.status = 'active' AND p.question_id IS NULL
-            """
-            
-            params = [username]
-
-            if selected_topic == 'RESTO_DEL_MUNDO':
-                # Busca una pregunta activa donde el tag_tema NO ESTÉ en las claves principales
-                # Excluimos usando los prefijos de las claves principales para ser robustos
-                exclusion_terms = [k for k in topics if k != "RESTO_DEL_MUNDO"]
-                conditions = " AND ".join([f"(tag_categoria NOT LIKE '{term}%' AND tag_tema NOT LIKE '{term}%')" for term in exclusion_terms])
-                
-                query_fractal = f"{query_new_base} AND {conditions} ORDER BY RANDOM() LIMIT 1"
-                cursor.execute(query_fractal, params)
-            else:
-                # Busca una pregunta donde tag_tema o tag_categoria coincida con el tópico seleccionado
-                # La lógica de split('_') se elimina ya que las claves ahora contienen espacios y acentos correctos (ej: "Cirugía General")
-                query_fractal = query_new_base + " AND (tag_tema LIKE ? OR tag_categoria LIKE ?) ORDER BY RANDOM() LIMIT 1"
-                term_like = f"{selected_topic}%"
-                params.extend([term_like, term_like])
-                cursor.execute(query_fractal, params)
-
-            question = cursor.fetchone()
-            if question:
-                return {'id': question['id'], 'is_advance': False}
-
-            # B3. Fallback: Si no hay deuda ni preguntas nuevas del tema elegido, busca CUALQUIER pregunta nueva aleatoria.
-            query_fallback_new = query_new_base + " ORDER BY RANDOM() LIMIT 1"
-            cursor.execute(query_fallback_new, (username,))
-            question = cursor.fetchone()
             if question:
                 return {'id': question['id'], 'is_advance': False}
 

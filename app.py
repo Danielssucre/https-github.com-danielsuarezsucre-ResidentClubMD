@@ -1993,27 +1993,32 @@ def render_question_card(question_id):
                         # Registrar actividad
                         update_user_activity(conn, st.session_state.current_user)
                         
-                        # --- AUDITORIA: Registrar ID respondido para evitar repetición ---
+                        # --- AUDITORIA: Registrar ID respondido ---
+                        if st.session_state.get('study_session_active'):
+                             # Incrementador de sesión
+                             st.session_state.session_progress = st.session_state.get('session_progress', 0) + 1
+                        
                         if st.session_state.get('practice_mode'):
                             if 'session_answered_ids' not in st.session_state: st.session_state.session_answered_ids = []
                             st.session_state.session_answered_ids.append(question_id)
                         
-                        # --- AUDITORIA: Limpieza profunda de estado (Anti-Ghosting) ---
+                        # Anti-Ghosting
                         keys_to_nuke = [f"card_state_{question_id}", f"user_answer_{question_id}", f"shuffled_options_{question_id}"]
                         for k in keys_to_nuke:
                             if k in st.session_state: del st.session_state[k]
                         
                         conn.commit()
+                        # Feedback Minimalista (Zero Distractions)
+                        # st.toast("✅ Respuesta guardada", icon="💾") 
                         
                     finally:
                         conn.close()
                     
-                    # Limpiar estado y recargar para siguiente pregunta
+                    # Recargar
                     if 'current_eval_question_data' in st.session_state:
                         st.session_state.previous_is_advance = st.session_state.current_eval_question_data.get('is_advance', False)
                         del st.session_state.current_eval_question_data
                     
-                    # FIX: Limpiar también el estado de la biblioteca por temas para evitar bucle infinito
                     if 'topic_question_id' in st.session_state:
                         del st.session_state.topic_question_id
                     st.rerun()
@@ -2083,10 +2088,52 @@ def render_question_card(question_id):
 
 def show_evaluation_page():
     """
-    Página principal de evaluación en Flujo Infinito. Muestra siempre una pregunta
-    y utiliza render_question_card para la interacción.
+    Página principal de evaluación con Lógica Segmentada (Aprender vs Repasar).
+    Optimizado para Sesiones de 30 tarjetas y UX Limpia.
     """
-    # --- 1. Lógica de Cabeceras de Modo (Solo para práctica por tema) ---
+    # --- 1. Gestión de Sesión Activa (Selector de Modo) ---
+    if not st.session_state.get('study_session_active', False) and not st.session_state.get('practice_mode'):
+        st.title("🧠 Centro de Entrenamiento")
+        st.write("Selecciona tu enfoque de hoy:")
+        
+        col_learn, col_rev = st.columns(2)
+        
+        with col_learn:
+            st.info("📚 **Modo Aprender**")
+            st.caption("Solo preguntas nuevas que nunca has visto.")
+            if st.button("Iniciar Aprendizaje", key="start_learn", use_container_width=True):
+                st.session_state.study_session_active = True
+                st.session_state.study_mode = 'LEARN'
+                st.session_state.session_progress = 0
+                st.session_state.session_limit = 30 # Opcional: Límite también en learn
+                st.session_state.session_start_time = datetime.datetime.now()
+                # Limpiar pregunta anterior
+                if 'current_eval_question_data' in st.session_state: del st.session_state.current_eval_question_data
+                st.rerun()
+
+        with col_rev:
+            st.warning("🔄 **Modo Repaso**")
+            st.caption("Solo preguntas vencidas (FSRS). Límite: 30 tarjetas.")
+            conn = get_db_conn()
+            due_count = conn.execute("SELECT COUNT(*) FROM progress WHERE username = ? AND due_date <= ?", 
+                                   (st.session_state.current_user, datetime.date.today())).fetchone()[0]
+            conn.close()
+            st.metric("Tarjetas Vencidas", due_count)
+            
+            if st.button("Iniciar Repaso Diario", key="start_review", type="primary", use_container_width=True):
+                st.session_state.study_session_active = True
+                st.session_state.study_mode = 'REVIEW'
+                st.session_state.session_progress = 0
+                st.session_state.session_limit = 30
+                st.session_state.session_start_time = datetime.datetime.now()
+                # Limpiar pregunta anterior
+                if 'current_eval_question_data' in st.session_state: del st.session_state.current_eval_question_data
+                st.rerun()
+                
+        # Short-circuit para no renderizar nada más
+        return
+
+    # --- 2. Lógica de Práctica (Legacy - Biblioteca) ---
     if st.session_state.get('practice_mode'):
         mode_label = st.session_state.get('selected_tag') or st.session_state.get('practice_specialty')
         if mode_label:
@@ -2094,66 +2141,62 @@ def show_evaluation_page():
         
         if st.button("⬅️ Volver a Biblioteca"):
             st.session_state.practice_mode = False
-            if 'selected_tag' in st.session_state: del st.session_state.selected_tag
-            if 'practice_specialty' in st.session_state: del st.session_state.practice_specialty
-            if 'practice_topics' in st.session_state: del st.session_state.practice_topics
+            # Limpieza
+            keys = ['selected_tag', 'practice_specialty', 'practice_topics', 'current_eval_question_data', 'last_displayed_id']
+            for k in keys:
+                if k in st.session_state: del st.session_state[k]
             st.session_state.current_page = "topics"
-            if 'current_eval_question_data' in st.session_state:
-                del st.session_state['current_eval_question_data']
-            if 'last_displayed_id' in st.session_state:
-                del st.session_state['last_displayed_id']
             st.rerun()
         st.markdown("---")
 
-    # --- 2. Gestión de la Pregunta Actual (Flujo Infinito) ---
+    # --- 3. Barra de Progreso y Control de Límite (Solo Sesión Activa) ---
+    if st.session_state.get('study_session_active'):
+        progress = st.session_state.get('session_progress', 0)
+        limit = st.session_state.get('session_limit', 30)
+        mode = st.session_state.get('study_mode', 'AUTO')
+        
+        # UI: Contador Estático
+        st.markdown(f"#### ⏱️ Progreso de Sesión ({mode}): **{progress} / {limit}**")
+        st.progress(min(progress / limit, 1.0))
+        
+        # CHECK LIMIT (Solo para REVIEW o si se quiere para ambos)
+        if mode == 'REVIEW' and progress >= limit:
+            st.success("✅ ¡Sesión Completada!")
+            st.write(f"Has repasado {progress} tarjetas.")
+            
+            if st.button("🏁 Finalizar Sesión", type="primary"):
+                st.session_state.study_session_active = False
+                del st.session_state.study_mode
+                del st.session_state.session_progress
+                st.session_state.current_page = "matrix_dashboard" # Redirigir al Panel Matrix
+                st.rerun()
+            return # Detener renderizado de preguntas
+
+    # --- 4. Fetch Question ---
     if 'current_eval_question_data' not in st.session_state:
-        st.session_state.current_eval_question_data = get_next_question_for_user(st.session_state.current_user)
+        # Pasamos el STUDY_MODE al fetcher
+        mode_arg = st.session_state.get('study_mode', 'AUTO')
+        st.session_state.current_eval_question_data = get_next_question_for_user(
+            st.session_state.current_user, 
+            study_mode=mode_arg
+        )
 
     q_data = st.session_state.current_eval_question_data
 
     if q_data is None:
-        # --- AUDITORIA: Manejo de Fin de Sesión (Cierre Limpio) ---
-        if st.session_state.get('practice_mode'):
-            st.balloons()
-            st.success("🎉 ¡Entrenamiento Completado!")
-            
-            stats = st.session_state.get('session_stats', {'correct': 0, 'total': 0})
-            score = int((stats['correct'] / stats['total'] * 100)) if stats['total'] > 0 else 0
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Preguntas", stats['total'])
-            col2.metric("Aciertos", stats['correct'])
-            col3.metric("Precisión", f"{score}%")
-            
-            st.markdown("---")
-            if st.button("🔄 Volver a Biblioteca", type="primary", use_container_width=True):
-                # Limpieza final
-                del st.session_state.practice_mode
-                st.session_state.current_page = "topics"
-                st.rerun()
-        else:
-            st.warning("No hay preguntas en el sistema. ¡Crea algunas para empezar a estudiar!")
+        # Fallback si no hay preguntas (ej: No hay repaso pendiente)
+        st.success("🎉 ¡Estás al día! No hay más preguntas pendientes en este modo.")
+        if st.button("🔄 Volver al Inicio", type="primary"):
+            st.session_state.study_session_active = False
+            if 'study_mode' in st.session_state: del st.session_state.study_mode
+            st.rerun()
         return
 
     q_id = q_data['id']
-    is_advance = q_data['is_advance']
+    is_advance = q_data.get('is_advance', False)
 
-    # --- 3. Notificación de Transición y Feedback Visual ---
-    if is_advance and not st.session_state.get('previous_is_advance', False):
-        st.toast('🎉 ¡Meta diaria cumplida! Entrando en Modo Infinito...', icon='🚀')
-
-    if is_advance:
-        st.caption("🔵 Modo Adelanto (Bonus FSRS)")
-    else:
-        st.caption("🔴 Repaso Prioritario / Nuevo")
-
-    # --- 4. Renderizado de la Pregunta ---
-    next_requested = render_question_card(q_id)
-    
-    if next_requested:
-        st.session_state.previous_is_advance = is_advance
-        del st.session_state.current_eval_question_data
-        st.rerun()
+    # --- 5. Renderizado ---
+    render_question_card(q_id)
 
 def show_topics_page():
     """
