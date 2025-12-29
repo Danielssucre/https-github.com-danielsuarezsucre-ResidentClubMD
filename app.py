@@ -4513,25 +4513,44 @@ def main():
                 st.session_state.current_page = "estadisticas"; st.rerun()
             
             # --- INICIO: Buzón de Sugerencias (Pre-producción) ---
+            # --- INICIO: Buzón de Sugerencias (Optimizado) ---
             with st.sidebar.expander("💡 Sugerir Tema de Estudio"):
+                # Migración Lazy: Asegurar columna 'specialty'
+                conn_schema = get_db_conn()
+                try:
+                    cols = [r['name'] for r in conn_schema.execute("PRAGMA table_info(suggested_topics)").fetchall()]
+                    if 'specialty' not in cols:
+                        conn_schema.execute("ALTER TABLE suggested_topics ADD COLUMN specialty TEXT")
+                        conn_schema.commit()
+                except Exception:
+                    pass
+                finally:
+                    conn_schema.close()
+
                 with st.form("suggestion_form", clear_on_submit=True):
-                    suggested_topic = st.text_input("Tema sugerido:")
+                    # Selector de Especialidad (Integración con Blueprint)
+                    specialties_list = sorted(list(GOLDEN_RATIO_DETAILED.keys()))
+                    selected_specialty = st.selectbox("Especialidad:", options=specialties_list, index=None, placeholder="Selecciona una...")
+                    
+                    suggested_topic = st.text_input("Tema específico:")
+                    
                     if st.form_submit_button("Enviar a Revisión"):
-                        if suggested_topic.strip():
+                        if suggested_topic.strip() and selected_specialty:
                             conn_sugg = get_db_conn()
                             try:
+                                # Payload enriquecido con especialidad
                                 conn_sugg.execute(
-                                    "INSERT INTO suggested_topics (raw_topic, suggester_name, status) VALUES (?, ?, 'PENDING')",
-                                    (suggested_topic.strip(), st.session_state.current_user)
+                                    "INSERT INTO suggested_topics (raw_topic, suggester_name, status, specialty) VALUES (?, ?, 'PENDING', ?)",
+                                    (suggested_topic.strip(), st.session_state.current_user, selected_specialty)
                                 )
                                 conn_sugg.commit()
-                                st.success('✅ Enviado a Pre-producción')
+                                st.success(f'✅ Enviado: {selected_specialty}')
                             except Exception as e:
                                 st.error(f"Error: {e}")
                             finally:
                                 conn_sugg.close()
                         else:
-                            st.warning("Escribe un tema.")
+                            st.warning("Completa ambos campos.")
             # --- FIN: Buzón de Sugerencias ---
 
             # Panel Admin
