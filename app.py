@@ -1948,6 +1948,13 @@ def render_question_card(question_id):
                     
                     conn = get_db_conn()
                     try:
+                        # --- 0. MIGRACIÓN LAZY: Metadata en activity_log ---
+                        try:
+                            conn.execute("ALTER TABLE activity_log ADD COLUMN metadata TEXT")
+                            conn.commit()
+                        except:
+                            pass
+                            
                         # Recuperar datos actuales
                         row = conn.execute("SELECT stability, difficulty, aciertos, fallos, last_review FROM progress WHERE username = ? AND question_id = ?", (st.session_state.current_user, question_id)).fetchone()
                         
@@ -1973,7 +1980,8 @@ def render_question_card(question_id):
                         new_due_date = today + datetime.timedelta(days=ivl)
                         
                         # Actualizar contadores
-                        new_aciertos = aciertos + (1 if rating > 1 else 0)
+                        is_correct = 1 if rating > 1 else 0
+                        new_aciertos = aciertos + is_correct
                         new_fallos = fallos + (1 if rating == 1 else 0)
                         
                         # Actualizar DB
@@ -1990,7 +1998,13 @@ def render_question_card(question_id):
                                 last_review = excluded.last_review
                         """, (st.session_state.current_user, question_id, new_due_date, ivl, new_aciertos, new_fallos, new_s, new_d, today))
                         
-                        # Registrar actividad
+                        # Registrar actividad con METADATA (Para Precisión Reciente)
+                        import json
+                        meta_json = json.dumps({"is_correct": is_correct, "rating": rating})
+                        conn.execute(
+                            "INSERT INTO activity_log (username, action_type, timestamp, metadata) VALUES (?, 'answer', ?, ?)",
+                            (st.session_state.current_user, datetime.datetime.now(), meta_json)
+                        )
                         update_user_activity(conn, st.session_state.current_user)
                         
                         # --- AUDITORIA: Registrar ID respondido ---
@@ -2155,11 +2169,28 @@ def show_evaluation_page():
         limit = st.session_state.get('session_limit', 30)
         mode = st.session_state.get('study_mode', 'AUTO')
         
-        # UI: Contador Estático
-        st.markdown(f"#### ⏱️ Progreso de Sesión ({mode}): **{progress} / {limit}**")
-        st.progress(min(progress / limit, 1.0))
+        # Layout de Cabecera: Progreso + Widget de Visibilidad
+        col_prog, col_vis = st.columns([3, 1])
+        with col_prog:
+            st.markdown(f"#### ⏱️ Progreso ({mode}): **{progress} / {limit}**")
+            st.progress(min(progress / limit, 1.0))
         
-        # CHECK LIMIT (Solo para REVIEW o si se quiere para ambos)
+        with col_vis:
+            # Widget de Visibilidad (Next Review)
+            # Solo podemos mostrarlo si tenemos la pregunta cargada
+            if 'current_eval_question_data' in st.session_state and st.session_state.current_eval_question_data:
+                q_id_temp = st.session_state.current_eval_question_data['id']
+                conn = get_db_conn()
+                res = conn.execute("SELECT stability FROM progress WHERE username = ? AND question_id = ?", (st.session_state.current_user, q_id_temp)).fetchone()
+                conn.close()
+                s_val = res['stability'] if res else 0.0
+                
+                if s_val > 0:
+                     st.metric("Retentividad", f"{int(s_val)} días", help="FSRS Stability: Estimación de cuánto tiempo recordarás esto.")
+                else:
+                     st.metric("Estado", "Nueva", help="Pregunta nunca vista.")
+
+        # CHECK LIMIT
         if mode == 'REVIEW' and progress >= limit:
             st.success("✅ ¡Sesión Completada!")
             st.write(f"Has repasado {progress} tarjetas.")
@@ -2168,9 +2199,9 @@ def show_evaluation_page():
                 st.session_state.study_session_active = False
                 del st.session_state.study_mode
                 del st.session_state.session_progress
-                st.session_state.current_page = "matrix_dashboard" # Redirigir al Panel Matrix
+                st.session_state.current_page = "matrix_dashboard" 
                 st.rerun()
-            return # Detener renderizado de preguntas
+            return
 
     # --- 4. Fetch Question ---
     if 'current_eval_question_data' not in st.session_state:
@@ -2272,18 +2303,47 @@ def get_fsrs_analytics(username):
         conn.close()
 
 def show_stats_page():
-    """Muestra un dashboard analítico con un sistema de clasificación automática."""
+    """Muestra un dashboard analítico con un sistema de clasificación automática (Métricas v2.0)."""
     st.header("📊 Dashboard Analítico de la Comunidad")
     
     conn = get_db_conn()
 
-    # Bloque de extracción de datos para el gráfico de Radar.
-    # Se ejecuta una consulta para obtener el rendimiento por tema del usuario.
+    # --- 0. Recent Accuracy Helper (Lógica Local Refinada) ---
+    def get_recent_accuracy(username):
+        try:
+            # Extraer últimos 50 logs de respuesta
+            logs = conn.execute(
+                "SELECT metadata FROM activity_log WHERE username = ? AND action_type = 'answer' ORDER BY timestamp DESC LIMIT 50", 
+                (username,)
+            ).fetchall()
+            
+            if not logs: return 0.0
+            
+            correct = 0
+            total = len(logs)
+            import json
+            for log in logs:
+                try:
+                    meta = json.loads(log['metadata']) if log['metadata'] else {}
+                    if meta.get('is_correct') == 1:
+                        correct += 1
+                except:
+                    pass
+            
+            return (correct / total * 100) if total > 0 else 0.0
+        except Exception as e:
+            print(f"Error calculating recent acc: {e}")
+            return 0.0
+
+    # --- 1. Datos Radar (Normalizado por Categoría) ---
+    # Cambiamos "preguntas_dominadas" a promedio de estabilidad relativa? No, el usuario pidió:
+    # "si el usuario solo ha estudiado 'Cardiología', el radar debe mostrar el dominio de esa categoría al 100% de su progreso"
+    # Manteniendo lógica de conteo pero dividiendo sobre TOTAL VISTO, no total banco.
     sql_radar = """
         SELECT
             q.tag_categoria AS tag,
-            COUNT(*) as total_preguntas,
-            SUM(CASE WHEN p.interval > 3 THEN 1 ELSE 0 END) as preguntas_dominadas
+            COUNT(*) as total_vistas,
+            SUM(CASE WHEN p.interval > 3 THEN 1 ELSE 0 END) as preguntas_dominadas 
         FROM questions q
         JOIN progress p ON q.id = p.question_id
         WHERE
@@ -2292,34 +2352,48 @@ def show_stats_page():
             AND q.tag_categoria != ''
             AND p.username = ?
         GROUP BY tag
-        ORDER BY total_preguntas DESC
+        ORDER BY total_vistas DESC
         LIMIT 6
     """
     df_radar = pd.read_sql_query(sql_radar, conn, params=(st.session_state.current_user,))
 
     if not df_radar.empty:
-        df_radar['Puntaje'] = (df_radar['preguntas_dominadas'] / df_radar['total_preguntas']) * 100
+        # Normalización Real: Dominio sobre lo VISTO
+        df_radar['Puntaje'] = (df_radar['preguntas_dominadas'] / df_radar['total_vistas']) * 100
+        
+        col_rad, col_metrics = st.columns([1, 1])
+        with col_rad:
+            st.subheader("🎯 Tu Radar Clínico")
+            fig = px.line_polar(
+                df_radar,
+                r='Puntaje',
+                theta='tag',
+                line_close=True,
+                range_r=[0, 100],
+            )
+            fig.update_traces(fill='toself')
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with col_metrics:
+            st.subheader("⚡ Pulso Actual")
+            acc_recent = get_recent_accuracy(st.session_state.current_user)
+            st.metric("Precisión Reciente (Últimas 50)", f"{acc_recent:.1f}%", help="Tu rendimiento en tiempo real.")
+            
+            # Widget de Próximo Repaso (Estimado)
+            next_rev_date = conn.execute("SELECT MIN(due_date) FROM progress WHERE username = ? AND due_date > ?", (st.session_state.current_user, datetime.date.today().strftime('%Y-%m-%d'))).fetchone()[0]
+            if next_rev_date:
+                 delta = (datetime.datetime.strptime(next_rev_date, '%Y-%m-%d').date() - datetime.date.today()).days
+                 st.metric("Próximo Repaso FSRS", f"En {delta} días", "Sigue así")
+            else:
+                 st.metric("Próximo Repaso", "Al día", "¡Excelente!")
 
-    if not df_radar.empty:
-        st.subheader("🎯 Tu Radar Clínico")
-        # Crear el gráfico
-        fig = px.line_polar(
-            df_radar,
-            r='Puntaje',
-            theta='tag',
-            line_close=True,
-            range_r=[0, 100],  # Escala fija de 0 a 100%
-        )
-        fig.update_traces(fill='toself') # Relleno de color sólido
-        # Mostrar en Streamlit
-        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Responde preguntas de diferentes temas para activar tu Radar Clínico.")
     
-    # 1. Extracción de Datos Granulares
+    # 2. Extracción de Datos Granulares (Ranking Global)
     total_questions_global = conn.execute("SELECT COUNT(*) as count FROM questions WHERE status = 'active'").fetchone()['count']
     
-    # Query para obtener todos los datos base de usuarios y su progreso
+    # Query maestra actualizada para maestría ponderada
     query = """
         SELECT 
             u.username,
@@ -2329,7 +2403,7 @@ def show_stats_page():
             u.current_streak,
             COALESCE(SUM(p.aciertos), 0) as total_aciertos,
             COALESCE(SUM(p.fallos), 0) as total_fallos,
-            COALESCE(SUM(CASE WHEN p.interval > 7 THEN 1 ELSE 0 END), 0) as mastered_count
+            AVG(p.stability) as avg_stability
         FROM 
             users u
         LEFT JOIN 
@@ -2337,7 +2411,7 @@ def show_stats_page():
         WHERE
             u.role != 'admin' AND u.status = 'active' AND u.username != 'guest_mode'
         GROUP BY
-            u.username, u.is_resident, u.is_reference_model
+            u.username, u.is_resident, u.is_reference_model, u.total_active_days, u.current_streak
     """
     df = pd.read_sql_query(query, conn)
     
@@ -2346,136 +2420,70 @@ def show_stats_page():
         conn.close()
         return
 
-    # 2. Transformación y Cálculo de Métricas
+    # 3. Transformación y Cálculo de Métricas v2.0
     df['total_answers'] = df['total_aciertos'] + df['total_fallos']
     df['accuracy'] = (df['total_aciertos'] / df['total_answers'] * 100).fillna(0.0)
-    df['mastery'] = (df['mastered_count'] / total_questions_global * 100) if total_questions_global > 0 else 0.0
+    
+    # MAESTRÍA PONDERADA: (Estabilidad Promedio / 21) * 100
+    # Refleja la solidez de la memoria, no solo el conteo. 21 días es un horizonte "fuerte".
+    df['avg_stability'] = df['avg_stability'].fillna(0.0)
+    df['mastery'] = (df['avg_stability'] / 21.0) * 100
+    df['mastery'] = df['mastery'].clip(upper=100.0) # Cap al 100%
 
     # --- CALCULAR PROMEDIO DE RESIDENTES ---
-    # Filtrar usuarios que son residentes (is_resident == 1)
     resident_data = df[df['is_resident'] == 1]
+    avg_resident_accuracy = resident_data['accuracy'].mean() if not resident_data.empty else 85.0
     
-    # Calcular promedio o usar valor por defecto si no hay residentes
-    if not resident_data.empty:
-        avg_resident_accuracy = resident_data['accuracy'].mean()
-    else:
-        avg_resident_accuracy = 85.0  # Valor base por defecto
-    
-    # Mostrar métrica en consola para depuración
-    print(f"📊 Promedio Precisión Residentes: {avg_resident_accuracy:.1f}%")
-
-    # 3. Algoritmo de Etiquetado (Clasificación)
+    # 4. Algoritmo de Etiquetado
     def get_status_label(row, threshold):
-        """Asigna una etiqueta de rango al usuario basada en su rendimiento."""
-        # Jerarquía Absoluta: Si es el Fantasma/Modelo, es el Residente Supremo.
-        if row.get('is_reference_model') == 1:
-            return "🎓 Residente"
-        
-        if row['is_resident'] == 1:
-            return "🎓 Residente"
-            
-        # --- AQUI SIGUE LA LÓGICA EXISTENTE DE PRECISIÓN ---
-        if row['accuracy'] >= (threshold * 0.98) and row['total_answers'] > 50:
-            return "⭐ Experto"
-        if row['accuracy'] < 60.0 or (row['total_answers'] > 20 and row['mastery'] < 10.0):
-            return "🚑 En Riesgo"
+        if row.get('is_reference_model') == 1: return "🎓 Residente"
+        if row['is_resident'] == 1: return "🎓 Residente"
+        if row['accuracy'] >= (threshold * 0.98) and row['total_answers'] > 50: return "⭐ Experto"
+        if row['accuracy'] < 60.0: return "🚑 En Riesgo"
         return "🦁 Estudiante"
 
-    # Se pasa 'avg_resident_accuracy' como argumento a la función apply.
     df['Estado'] = df.apply(get_status_label, axis=1, args=(avg_resident_accuracy,))
 
-    # --- INICIO: LÓGICA DE ORDENAMIENTO DEL RANKING ---
-    # 1. Ordenar: Constancia (Rey) -> Precisión -> Maestría
+    # 5. Ordenamiento: Maestría Ponderada tiene peso ahora
     df = df.sort_values(by=['total_active_days', 'accuracy', 'mastery'], ascending=[False, False, False])
-    # 2. Resetear índice para que empiece en 0 el orden nuevo
     df = df.reset_index(drop=True)
-    # 3. Crear columna de Posición (#) basada en el nuevo índice
     df.insert(0, '#', df.index + 1)
-    # --- FIN: LÓGICA DE ORDENAMIENTO ---
 
-    # Lógica de Racha para Display
+    # Lógica de Racha
     df['dias_acumulados_display'] = df.apply(
         lambda row: f"🔥 {row['total_active_days']}" if row['current_streak'] >= 3 else f"{row['total_active_days']}",
         axis=1
     )
 
-    # --- INICIO: GRÁFICO COMPARATIVO DE RENDIMIENTO ---
+    # --- INICIO: GRÁFICO COMPARATIVO ---
     st.subheader("📈 Tu Rendimiento vs. La Comunidad")
-
-    # 1. Cálculo de Métricas con Pandas
-    # Nota: Se usa 'current_user' que es la variable correcta en st.session_state para esta app.
-    user_accuracy_row = df[df['username'] == st.session_state.current_user]
-    val_tu = user_accuracy_row['accuracy'].iloc[0] if not user_accuracy_row.empty else 0.0
-    
+    user_row = df[df['username'] == st.session_state.current_user]
+    val_tu = user_row['accuracy'].iloc[0] if not user_row.empty else 0.0
     val_comunidad = df['accuracy'].mean()
-    # El df ya está ordenado, por lo que .head(10) obtiene los mejores usuarios.
     val_top10 = df.head(10)['accuracy'].mean()
-
-    # --- INICIO: BLOQUE DE DEBUG AUDITORÍA ---
-    print("\n" + "="*40)
-    print("🕵️‍♂️ AUDITORÍA DE DATOS DEL GRÁFICO")
-    print("="*40)
-    # 1. Verificar población total
-    print(f"👥 Total de Usuarios en DataFrame: {len(df)}")
-
-    # 2. Verificar datos de tu usuario
-    # Corregido a 'current_user' y formato de if/else
-    user_row_debug = df[df['username'] == st.session_state.current_user]
-    if not user_row_debug.empty:
-        tu_data = user_row_debug.iloc[0]
-        print(f"👤 TÚ ({tu_data['username']}): Constancia={tu_data['total_active_days']} días | Precisión={tu_data['accuracy']:.2f}%")
-    else:
-        print("👤 TÚ: No encontrado en el ranking.")
-
-    # 3. Verificar el Top 10 seleccionado
-    top_10_debug = df.head(10)
-    print("\n🏆 TOP 10 SELECCIONADOS (Orden actual):")
-    print(top_10_debug[['username', 'total_active_days', 'accuracy', 'mastery']].to_string(index=False))
-
-    # 4. Verificar los promedios matemáticos
-    prom_comunidad = df['accuracy'].mean()
-    prom_top10 = top_10_debug['accuracy'].mean()
-    print(f"\n🧮 CÁLCULOS INTERNOS:")
-    print(f"Promedio Comunidad: {prom_comunidad:.4f}%")
-    print(f"Promedio Top 10: {prom_top10:.4f}%")
-    print("="*40 + "\n")
-    # --- FIN: BLOQUE DE DEBUG AUDITORÍA ---
     
-    # 2. Preparación del DataFrame para el gráfico
     data_comp = pd.DataFrame({
         'Comparativa': ['Tú', 'Promedio Comunidad', 'Top 10 Expertos'],
         'Precisión': [val_tu, val_comunidad, val_top10],
-        'Color': ['#3b82f6', '#9ca3af', '#eab308']  # Azul Vivo, Gris Neutro, Dorado Brillante
+        'Color': ['#3b82f6', '#9ca3af', '#eab308']
     })
 
-    # 3. Visualización (Altair) - Barras + Texto
     bars = alt.Chart(data_comp).mark_bar().encode(
         x=alt.X('Comparativa:N', sort=None, title=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y('Precisión:Q', title='Precisión (%)', axis=alt.Axis(grid=False)),
         color=alt.Color('Color:N', scale=None, legend=None),
         tooltip=['Comparativa', alt.Tooltip('Precisión', title='Precisión', format='.1f')]
     )
+    text = bars.mark_text(align='center', baseline='bottom', dy=-10).encode(text=alt.Text('Precisión:Q', format='.1f'))
+    st.altair_chart((bars + text).configure_view(strokeWidth=0), use_container_width=True)
+    st.markdown("---")
 
-    text = bars.mark_text(
-        align='center',
-        baseline='bottom',
-        dy=-10  # Mueve el texto 10px por encima de la barra
-    ).encode(
-        text=alt.Text('Precisión:Q', format='.1f')
-    )
-
-    chart = (bars + text).configure_view(strokeWidth=0)
-
-    st.altair_chart(chart, use_container_width=True)
-    st.markdown("---") # Separador visual antes de la tabla de ranking
-    # --- FIN: GRÁFICO COMPARATIVO DE RENDIMIENTO ---
-
-    # 4. Preparación para Visualización
+    # 6. Tabla Ranking (Renombrando Columnas)
     df_display = df[['#', 'username', 'Estado', 'dias_acumulados_display', 'accuracy', 'mastery', 'total_answers']].copy()
     df_display.rename(columns={
         'username': 'Usuario',
-        'accuracy': 'Precisión',
-        'mastery': 'Maestría',
+        'accuracy': 'Precisión Histórica', # Diferenciada de la Reciente
+        'mastery': 'Cobertura del Banco', # Renombrado por Honestidad
         'total_answers': 'Respuestas',
         'dias_acumulados_display': 'Días Acumulados'
     }, inplace=True)
@@ -2484,25 +2492,21 @@ def show_stats_page():
         df_display,
         column_config={
             "#": st.column_config.NumberColumn("Pos.", width="small", format="%d"),
-            "Usuario": "Usuario",
-            "Estado": "Estado",
-            "Días Acumulados": "Días",
-            "Precisión": st.column_config.ProgressColumn(
-                "Precisión",
-                help="Porcentaje de respuestas correctas (Aciertos / Totales).",
+            "Precisión Histórica": st.column_config.ProgressColumn(
+                "Precisión Histórica",
+                help="Promedio global de toda tu vida en la plataforma.",
                 format="%.1f%%", min_value=0, max_value=100,
             ),
-            "Maestría": st.column_config.ProgressColumn(
-                "Maestría",
-                help="Porcentaje de preguntas del sistema dominadas (intervalo > 7 días).",
+            "Cobertura del Banco": st.column_config.ProgressColumn(
+                "Cobertura (Maestría)",
+                help="Solidez de tu memoria basada en Estabilidad FSRS (Meta: 21 días).",
                 format="%.1f%%", min_value=0, max_value=100,
             ),
         },
         use_container_width=True,
-        hide_index=True,
-        column_order=("#", "Usuario", "Estado", "Días Acumulados", "Precisión", "Maestría", "Respuestas")
+        hide_index=True
     )
-
+    
     # --- INICIO: Dashboard FSRS (Exclusivo Intensivo/MAFU) ---
     try:
         # Verificación de Privilegios
