@@ -3358,33 +3358,31 @@ def render_matrix_admin():
         try:
             prompt_row = conn_prompt.execute("SELECT value FROM system_config WHERE key = 'matrix_prompt_template'").fetchone()
             
-            default_prompt = """Actúa como 'CMTG-5' (Clinical Memory Trace Generator - Colombia). Tu objetivo es doble: enseñar el concepto clínico Y enseñar técnicas de resolución de exámenes (Test-Taking Strategies).
+            default_prompt = """Actúa como 'CMTG-5' (Clinical Memory Trace Generator). Tu misión es generar preguntas de examen médico de Alta Complejidad (Nivel Especialista).
 
-### 1. PROTOCOLO DE CONSTRUCCIÓN
-1. Análisis: Desglosa el texto fuente de {topic_name}.
-2. Diseño de Pregunta: Crea 5 preguntas sobre {topic_name} donde, además del conocimiento médico, sea posible llegar a la respuesta usando lógica, descarte o análisis semántico.
-3. Auditoría: Verifica la respuesta contra el texto fuente.
+### PROTOCOLO DE CONSTRUCCIÓN
+1. **Verdad Clínica**: Usa solo guías clínicas validadas (ESC, AHA, ADA). Penalización masiva por alucinaciones.
+2. **Estructura Estricta**: Genera 4 opciones obligatorias. NUNCA respondas con 'N/A' o opciones vacías.
+3. **Lógica de Distractores**: Los distractores deben ser plausibles pero incorrectos.
 
-### 2. ESTRUCTURA DE RETROALIMENTACIÓN (EL CEREBRO DEL EXAMEN)
-Dentro del JSON, el campo de retroalimentación debe ser rico y estructurado:
-- ANCLAJE: La definición médica exacta del texto.
-- MAESTRÍA: La explicación fisiopatológica profunda.
-- HACK: (NUEVO) Explica la técnica de 'Test-Taking' usada (ej: 'Regla de los Opuestos'). Explica CÓMO el estudiante podía adivinar la respuesta correcta usando esta lógica si no sabía el dato.
-
-### 3. FORMATO DE SALIDA (JSON)
-Genera un ARRAY JSON de objetos. Cada objeto debe tener:
+### FORMATO DE SALIDA (SCHEMA STRICT JSON)
+Genera ÚNICAMENTE un ARRAY JSON con esta estructura exacta para cada pregunta:
 [
   {
-    "enunciado": "Vignette clínica...",
-    "opciones": ["[A]...", "[B]...", "[C]...", "[D]..."],
-    "correcta": "[X] Opción Correcta",
-    "retroalimentacion": "ANCLAJE: ... MAESTRÍA: ... HACK: ...",
-    "concepto_clave": "Concepto médico corto",
-    "badge_verificacion": "✅ Verificado",
-    "tag_tema": "Subtema específico"
+    "stem": "Vignette clínica detallada (Paciente de X años...)",
+    "options": [
+      { "id": "A", "text": "Opción 1", "is_correct": false },
+      { "id": "B", "text": "Opción 2 (Correcta)", "is_correct": true },
+      { "id": "C", "text": "Opción 3", "is_correct": false },
+      { "id": "D", "text": "Opción 4", "is_correct": false }
+    ],
+    "explanation": "ANCLAJE: ... MAESTRÍA: ... HACK: ...",
+    "concept_key": "Concepto Corto",
+    "verif_badge": "✅ Guía XYZ 2024",
+    "topic_tag": "{topic_name}"
   }
 ]
-Asegúrate de que el JSON sea válido y de generar exactamente 5 preguntas."""
+Asegúrate de generar **5 preguntas** completas. Revisa que ninguna opción sea 'N/A'."""
 
             current_prompt = prompt_row['value'] if prompt_row and prompt_row['value'] else default_prompt
             

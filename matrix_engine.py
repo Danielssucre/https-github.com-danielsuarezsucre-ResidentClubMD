@@ -256,23 +256,95 @@ class MatrixWorker(threading.Thread):
         final_prompt = prompt_template.replace("{topic_name}", topic_name)
         
         # --- FASE 2: GENERACIÓN (API - SIN DB) ---
-        print(f"[MATRIZ] -> Fase 2: Generando contenido con IA...")
+        # --- FASE 2 & 3: GENERACIÓN Y PERSISTENCIA (CON RETRY) ---
+        MAX_RETRIES = 3
         
-        # AHORA call_gemini_api DEVUELVE TUPLA (DATA, ERROR)
-        generated_data, api_error = self.call_gemini_api(api_key, final_prompt)
-        
-        if not generated_data:
-            print(f"[MATRIZ] -> Fallo API: {api_error}. Abortando para evitar bucle de costos...")
-            # FINOPS SAFEGUARD: Usamos 'ERROR' para detener reintentos infinitos
-            err_msg = api_error if api_error else "Fallo API"
-            self.update_topic_status(topic_id, 'ERROR', err_msg)
-            return False
+        for attempt in range(MAX_RETRIES):
+            print(f"[MATRIZ] -> Intento {attempt+1}/{MAX_RETRIES}: Generando contenido con IA...")
             
-        # --- FASE 3: PERSISTENCIA (DB - ATÓMICA) ---
-        print(f"[MATRIZ] -> Fase 3: Escribiendo en disco rígido...")
-        return self.save_results_atomic(topic_id, topic_name, category, generated_data)
+            # API Call
+            generated_data, api_error = self.call_gemini_api(api_key, final_prompt)
+            
+            if not generated_data:
+                print(f"[MATRIZ] -> Fallo API (Intento {attempt+1}): {api_error}")
+                # Si es el último intento, marcar error
+                if attempt == MAX_RETRIES - 1:
+                    self.update_topic_status(topic_id, 'ERROR', api_error or "API Failed")
+                    return False
+                continue 
 
-    def save_results_atomic(self, topic_id, topic_name, category, data):
+            # Validar y Guardar (Returns True if success, False if Guardrails triggered)
+            print(f"[MATRIZ] -> Validando y Guardando...")
+            success = self.save_results_atomic(topic_id, topic_name, category, generated_data, api_key=api_key)
+            
+            if success:
+                return True
+            else:
+                print(f"[MATRIZ] -> ⚠️ Validación Fallida (Guardrails activados). Reintentando...")
+        
+        # Si agotamos intentos
+        print(f"[MATRIZ] -> ❌ Abortando tras {MAX_RETRIES} intentos fallidos.")
+        self.update_topic_status(topic_id, 'ERROR', "Quality Guardrails Failed (N/A Options or Hallucinations)")
+        return False
+
+    def check_length_bias(self, options_list):
+        """
+        Verifica que ninguna opción sea > 2.5 veces más larga que la media de las otras.
+        Recibe lista de strings (opciones ya formateadas o crudas).
+        """
+        if not options_list: return True
+        # Limpiar prefijos [A] si existen para medir solo texto real
+        cleaned_opts = [o.split('] ', 1)[1] if '] ' in o else o for o in options_list]
+        lengths = [len(txt) for txt in cleaned_opts]
+        
+        if not lengths: return True
+        avg_len = sum(lengths) / len(lengths)
+        max_len = max(lengths)
+        
+        # Avoid division by zero or tiny avg
+        if avg_len < 10: return True 
+        
+        # Ratio de Desviación
+        if max_len > (avg_len * 2.5):
+            print(f"[MATRIZ] -> ⚠️ RECHAZO POR SESGO DE LONGITUD: Max={max_len} vs Avg={avg_len:.1f}")
+            return False
+        return True
+
+    def verify_medical_accuracy(self, api_key, question_json):
+        """
+        Agente Crítico: Revisa veracidad clínica.
+        """
+        audit_prompt = f"""ACTÚA COMO: Senior Medical Editor (USMLE/MIR Board).
+TAREA: Audita la siguiente pregunta médica:
+1. Veracidad Clínica: ¿La respuesta correcta es indiscutible?
+2. Lógica: ¿Los distractores son incorrectos?
+
+PREGUNTA:
+{json.dumps(question_json)}
+
+SALIDA (JSON ESTRICTO):
+{{
+    "verdict": "APPROVE" o "REJECT",
+    "reason": "Explicación breve"
+}}"""
+        
+        # Llamada a API (usando la misma key)
+        audit_data, error = self.call_gemini_api(api_key, audit_prompt)
+        
+        if error or not audit_data:
+            print(f"[MATRIZ] -> ⚠️ PELIGRO: Auditoría caída. Pregunta pasó sin revisión. Error: {error}")
+            return True, "Audit Bypass (System Error)"
+            
+        verdict = audit_data.get("verdict")
+        reason = audit_data.get("reason", "No reason provided")
+        
+        if verdict == "APPROVE":
+            return True, "OK"
+        else:
+            print(f"[MATRIZ] -> 🛑 RECHAZO MÉDICO: {reason}")
+            return False, reason
+
+    def save_results_atomic(self, topic_id, topic_name, category, data, api_key=None):
         conn = self.get_db_conn()
         try:
             # Normalizar datos
@@ -280,29 +352,76 @@ class MatrixWorker(threading.Thread):
             count = 0
             
             for q in items:
-                # Validar campos mínimos
-                if not all(k in q for k in ('enunciado', 'opciones', 'correcta')):
+                # --- POLYGLOT PARSER (Legacy + Strict JSON) ---
+                enunciado = q.get('stem', q.get('enunciado'))
+                explanation = q.get('explanation', q.get('retroalimentacion', 'Generado por IA'))
+                topic_tag = q.get('topic_tag', q.get('tag_tema', topic_name))
+                
+                raw_options = q.get('options', q.get('opciones', []))
+                
+                # 1. Parsing de Opciones
+                final_ops_list = []
+                correct_answer_str = None
+                
+                if not raw_options or not isinstance(raw_options, list):
+                    print(f"[MATRIZ] -> ⚠️ Skip: Opciones inválidas o vacías.")
                     continue
                 
-                ops = q['opciones']
-                ops_str = "|".join(ops) if isinstance(ops, list) else str(ops)
+                # BRANCH A: Nuevo Schema (Lista de Objetos)
+                if isinstance(raw_options[0], dict):
+                    # Guardrail: Verificar 'N/A'
+                    valid_opts = [o for o in raw_options if o.get('text') and o.get('text') != 'N/A']
+                    if len(valid_opts) < 4:
+                        print(f"[MATRIZ] -> ⚠️ Guardrail: Menos de 4 opciones válidas ({len(valid_opts)}). Skip.")
+                        continue
+                    
+                    # Extraer textos y encontrar correcta
+                    for obj in valid_opts[:4]: # Fuerza 4
+                        txt = obj.get('text', 'Error')
+                        prefix = obj.get('id', '?')
+                        formatted_opt = f"[{prefix}] {txt}" if not txt.startswith('[') else txt
+                        final_ops_list.append(formatted_opt)
+                        
+                        if obj.get('is_correct'):
+                            correct_answer_str = formatted_opt
+                
+                # BRANCH B: Legacy Schema (Lista de Strings)
+                else:
+                    final_ops_list = raw_options
+                    correct_answer_str = q.get('correcta')
+                    # Guardraill básico para legado
+                    if len(final_ops_list) < 4 or any(o == 'N/A' for o in final_ops_list):
+                         print(f"[MATRIZ] -> ⚠️ Guardrail Legacy: Opciones insuficientes o 'N/A'. Skip.")
+                         continue
+                
+                # 2. Validación Final de Integridad
+                if not enunciado or not final_ops_list or not correct_answer_str:
+                     print(f"[MATRIZ] -> ⚠️ Skip: Enunciado o Correcta faltantes.")
+                     continue
+                
+                # 3. Guardrails Avanzados (Bias & Audit)
+                if not self.check_length_bias(final_ops_list):
+                    continue
+
+                if api_key:
+                    is_valid, reason = self.verify_medical_accuracy(api_key, q)
+                    if not is_valid:
+                        print(f"[MATRIZ] -> ⚠️ Skip: Rechazo Semántico ({reason})")
+                        continue
+                
+                ops_str = "|".join(final_ops_list)
                 
                 # --- LÓGICA CMTG-5: MAPEO DE ESENCIA ---
-                # Extraer nuevos campos pedagógicos
-                concepto = q.get('concepto_clave')
-                badge = q.get('badge_verificacion')
-                base_feedback = q.get('retroalimentacion', 'Generado por IA')
+                concepto = q.get('concept_key', q.get('concepto_clave'))
+                badge = q.get('verif_badge', q.get('badge_verificacion'))
                 
-                # Construir prefijo visual (Legacy Support)
-                prefix = ""
+                prefix_fb = ""
                 if concepto:
-                    prefix += f"🔑 **Concepto Clave:** {concepto}\n\n"
+                    prefix_fb += f"🔑 **Concepto Clave:** {concepto}\n\n"
                 if badge:
-                     # Usamos un estilo de badge visual si es posible, o texto plano
-                    prefix += f"🛡️ {badge}\n\n"
+                    prefix_fb += f"🛡️ {badge}\n\n"
                 
-                # Feedback Enriquecido Final
-                final_feedback = prefix + base_feedback
+                final_feedback = prefix_fb + explanation
                 
                 conn.execute("""
                     INSERT INTO questions 
@@ -310,12 +429,12 @@ class MatrixWorker(threading.Thread):
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """, (
                     'Matrix_AI', 
-                    q['enunciado'], 
+                    enunciado, 
                     ops_str, 
-                    q['correcta'], 
+                    correct_answer_str, 
                     final_feedback, 
                     category, 
-                    q.get('tag_tema', topic_name), # CMTG-5 a veces devuelve su propio tag
+                    topic_tag, 
                     datetime.datetime.now(),
                     'Dificil'
                 ))
