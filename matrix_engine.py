@@ -304,8 +304,8 @@ class MatrixWorker(threading.Thread):
         # Avoid division by zero or tiny avg
         if avg_len < 10: return True 
         
-        # Ratio de Desviación
-        if max_len > (avg_len * 2.5):
+        # Ratio de Desviación (Relaxed to 4.0x for complex medical answers)
+        if max_len > (avg_len * 4.0):
             print(f"[MATRIZ] -> ⚠️ RECHAZO POR SESGO DE LONGITUD: Max={max_len} vs Avg={avg_len:.1f}")
             return False
         return True
