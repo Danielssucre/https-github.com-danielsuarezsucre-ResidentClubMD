@@ -2598,19 +2598,24 @@ def show_manage_questions_page():
         
         with st.form("edit_question_form"):
             new_enunciado = st.text_area("Enunciado", value=row['enunciado'])
-            ops = row['opciones'].split('|')
+            ops = row['opciones'].split('|') if row['opciones'] else []
+            # Validación Segura Anti-IndexError
+            if len(ops) < 4: 
+                ops = ops + ['N/A'] * (4 - len(ops))
             op_a, op_b, op_c, op_d = ops[0], ops[1], ops[2], ops[3]
+            
             op_a = st.text_input("Opción A", value=op_a)
             op_b = st.text_input("Opción B", value=op_b)
             op_c = st.text_input("Opción C", value=op_c)
             op_d = st.text_input("Opción D", value=op_d)
             new_correcta_idx = st.radio("Respuesta Correcta", (0, 1, 2, 3), format_func=lambda x: f"Opción {chr(65+x)}")
-            new_retro = st.text_area("Retroalimentación", value=row['retroalimentacion'])
+            # CMTG-5: Retroalimentación expandida (Text Area Grande) to capture Hacks
+            new_retro = st.text_area("Retroalimentación (CMTG-5 Habilitado)", value=row['retroalimentacion'], height=200)
             new_cat = st.selectbox("Categoría", options=all_categories, index=cat_index)
             new_tema = st.text_input("Tema", value=row['tag_tema'] or "")
             
-            save_btn, cancel_btn = st.columns(2)
-            if save_btn.form_submit_button("💾 Guardar Cambios", type="primary"):
+            submitted = st.form_submit_button("💾 Guardar Cambios", type="primary")
+            if submitted:
                 new_opciones = "|".join([op_a, op_b, op_c, op_d])
                 correcta_val = [op_a, op_b, op_c, op_d][new_correcta_idx]
                 conn = get_db_conn()
@@ -2618,9 +2623,6 @@ def show_manage_questions_page():
                 conn.commit()
                 conn.close()
                 st.success("Pregunta actualizada.")
-                st.session_state.editing_question_id = None
-                st.rerun()
-            if cancel_btn.form_submit_button("❌ Cancelar"):
                 st.session_state.editing_question_id = None
                 st.rerun()
         return
