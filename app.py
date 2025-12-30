@@ -3344,15 +3344,33 @@ def render_matrix_admin():
         try:
             prompt_row = conn_prompt.execute("SELECT value FROM system_config WHERE key = 'matrix_prompt_template'").fetchone()
             
-            default_prompt = """Actúa como un experto en {topic_name} creando preguntas de opción múltiple para un examen de residencia médica.
-Genera 5 preguntas sobre {topic_name}.
-Formato de salida: Un array JSON de objetos. Cada objeto debe tener:
-- "enunciado": El texto de la pregunta (string).
-- "opciones": Una lista de 4 posibles respuestas (list of strings). IMPORTANTE: Cada opción en la lista DEBE tener un prefijo de anclaje estático, por ejemplo: "[A] Opción 1", "[B] Opción 2".
-- "correcta": La respuesta correcta exacta de la lista de opciones, INCLUYENDO el prefijo de anclaje (ej: "[C] Opción 3").
-- "retroalimentacion": Una explicación detallada de por qué la respuesta es correcta (string).
-- "tag_tema": Una etiqueta específica sobre el sub-tema tratado (ej: 'Manejo de Shock').
-Asegúrate de que el JSON sea válido y completo."""
+            default_prompt = """Actúa como 'CMTG-5' (Clinical Memory Trace Generator - Colombia). Tu objetivo es doble: enseñar el concepto clínico Y enseñar técnicas de resolución de exámenes (Test-Taking Strategies).
+
+### 1. PROTOCOLO DE CONSTRUCCIÓN
+1. Análisis: Desglosa el texto fuente de {topic_name}.
+2. Diseño de Pregunta: Crea 5 preguntas sobre {topic_name} donde, además del conocimiento médico, sea posible llegar a la respuesta usando lógica, descarte o análisis semántico.
+3. Auditoría: Verifica la respuesta contra el texto fuente.
+
+### 2. ESTRUCTURA DE RETROALIMENTACIÓN (EL CEREBRO DEL EXAMEN)
+Dentro del JSON, el campo de retroalimentación debe ser rico y estructurado:
+- ANCLAJE: La definición médica exacta del texto.
+- MAESTRÍA: La explicación fisiopatológica profunda.
+- HACK: (NUEVO) Explica la técnica de 'Test-Taking' usada (ej: 'Regla de los Opuestos'). Explica CÓMO el estudiante podía adivinar la respuesta correcta usando esta lógica si no sabía el dato.
+
+### 3. FORMATO DE SALIDA (JSON)
+Genera un ARRAY JSON de objetos. Cada objeto debe tener:
+[
+  {
+    "enunciado": "Vignette clínica...",
+    "opciones": ["[A]...", "[B]...", "[C]...", "[D]..."],
+    "correcta": "[X] Opción Correcta",
+    "retroalimentacion": "ANCLAJE: ... MAESTRÍA: ... HACK: ...",
+    "concepto_clave": "Concepto médico corto",
+    "badge_verificacion": "✅ Verificado",
+    "tag_tema": "Subtema específico"
+  }
+]
+Asegúrate de que el JSON sea válido y de generar exactamente 5 preguntas."""
 
             current_prompt = prompt_row['value'] if prompt_row and prompt_row['value'] else default_prompt
             

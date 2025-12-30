@@ -280,12 +280,29 @@ class MatrixWorker(threading.Thread):
             count = 0
             
             for q in items:
-                # Validar campos
+                # Validar campos mínimos
                 if not all(k in q for k in ('enunciado', 'opciones', 'correcta')):
                     continue
                 
                 ops = q['opciones']
                 ops_str = "|".join(ops) if isinstance(ops, list) else str(ops)
+                
+                # --- LÓGICA CMTG-5: MAPEO DE ESENCIA ---
+                # Extraer nuevos campos pedagógicos
+                concepto = q.get('concepto_clave')
+                badge = q.get('badge_verificacion')
+                base_feedback = q.get('retroalimentacion', 'Generado por IA')
+                
+                # Construir prefijo visual (Legacy Support)
+                prefix = ""
+                if concepto:
+                    prefix += f"🔑 **Concepto Clave:** {concepto}\n\n"
+                if badge:
+                     # Usamos un estilo de badge visual si es posible, o texto plano
+                    prefix += f"🛡️ {badge}\n\n"
+                
+                # Feedback Enriquecido Final
+                final_feedback = prefix + base_feedback
                 
                 conn.execute("""
                     INSERT INTO questions 
@@ -296,9 +313,9 @@ class MatrixWorker(threading.Thread):
                     q['enunciado'], 
                     ops_str, 
                     q['correcta'], 
-                    q.get('retroalimentacion', 'Generado por IA'), 
+                    final_feedback, 
                     category, 
-                    topic_name, 
+                    q.get('tag_tema', topic_name), # CMTG-5 a veces devuelve su propio tag
                     datetime.datetime.now(),
                     'Dificil'
                 ))
