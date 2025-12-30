@@ -395,14 +395,28 @@ class MatrixWorker(threading.Thread):
                             print("[MATRIZ] -> ERROR: Respuesta vacía de la API.")
                             return None, "Respuesta Vacía"
                             
-                        return json.loads(text_content), None
-                    except Exception as e:
-                        print(f"[MATRIZ] -> Error JSON Parse ({model_name}): {e}")
-                        last_error = f"JSON Error: {str(e)}"
-                        # Si es error de JSON, quizás el modelo respondió mal, intentamos siguiente? 
-                        # No, JSON inválido es éxito de HTTP pero fallo de contenido. Mejor abortar o seguir?
-                        # Seguir con otro modelo podría arreglarlo.
-                        continue
+                        # --- SANITIZACIÓN ROBUSTA DE JSON ---
+                        # 1. Eliminar fences de Markdown
+                        clean_text = text_content.replace('```json', '').replace('```', '').strip()
+                        
+                        # 2. Encontrar límites de Array JSON [...]
+                        start_idx = clean_text.find('[')
+                        end_idx = clean_text.rfind(']')
+                        
+                        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                            clean_text = clean_text[start_idx : end_idx + 1]
+                        
+                        try:
+                            # Intento Principal
+                            return json.loads(clean_text), None
+                        except json.JSONDecodeError as json_err:
+                            print(f"[MATRIZ] -> ⚠️ JSON Decode Error directo: {json_err}")
+                            # Fallback: A veces Gemini pone texto antes o después sin fences
+                            # Ya hemos recortado por [] pero si falla, quizás hay algo mal dentro.
+                            # Intentamos un strip() más agresivo o devolvemos error detallado
+                            print(f"[MATRIZ] -> [DEBUG] Failed Text Segment: {clean_text[:100]}...")
+                            return None, f"JSON Error: {json_err}"
+
                         
                 elif response.status_code == 404:
                     print(f"[MATRIZ] -> Modelo {model_name} no encontrado (404). Probando siguiente...")
