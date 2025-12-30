@@ -77,7 +77,7 @@ def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO')
     """
     conn = dbm.get_db_conn()
     cursor = conn.cursor()
-    today = datetime.date.today()
+    today = datetime.date.today().isoformat()
 
     try:
         # --- A. MODO PRÁCTICA (BIBLIOTECA) ---

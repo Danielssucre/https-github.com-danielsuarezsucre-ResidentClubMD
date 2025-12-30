@@ -113,7 +113,7 @@ def check_guest_access():
         # 2. Verificar límites diarios
         limit_row = conn.execute(
             "SELECT questions_used FROM daily_limits WHERE ip_address = ? AND usage_date = ?", 
-            (ip, today)
+            (ip, today.isoformat())
         ).fetchone()
         
         used = limit_row['questions_used'] if limit_row else 0
@@ -154,7 +154,7 @@ def increment_guest_usage():
             VALUES (?, ?, 1)
             ON CONFLICT(ip_address, usage_date) DO UPDATE SET
             questions_used = questions_used + 1
-        """, (ip, today))
+        """, (ip, today.isoformat()))
         conn.commit()
     finally:
         conn.close()
@@ -1305,7 +1305,7 @@ def update_user_activity(conn, username):
             
     conn.execute(
         "UPDATE users SET last_active_date = ?, current_streak = ?, total_active_days = ? WHERE username = ?",
-        (today, new_streak, new_total_days, username)
+        (today.isoformat(), new_streak, new_total_days, username)
     )
 
 def show_login_page():
@@ -1539,7 +1539,7 @@ def show_create_page():
                 # --- INICIO SECCIÓN MODO INTENSIVO: Registrar actividad ---
                 cursor.execute(
                     "INSERT INTO activity_log (username, action_type, timestamp) VALUES (?, 'create', ?)",
-                    (owner, datetime.datetime.now())
+                    (owner, datetime.datetime.now().isoformat())
                 )
                 # --- FIN SECCIÓN MODO INTENSIVO ---
                 
@@ -1629,19 +1629,13 @@ def update_srs(conn, username, question_id, difficulty_rating):
         INSERT INTO progress (username, question_id, due_date, interval, aciertos, fallos, stability, difficulty, last_review)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(username, question_id) DO UPDATE SET
-            due_date = excluded.due_date,
-            interval = excluded.interval,
-            aciertos = excluded.aciertos,
-            fallos = excluded.fallos,
-            stability = excluded.stability,
-            difficulty = excluded.difficulty,
             last_review = excluded.last_review
-    """, (username, question_id, new_due_date, new_interval, aciertos, fallos, s_new, d_new, today))
+    """, (username, question_id, new_due_date.isoformat(), new_interval, aciertos, fallos, s_new, d_new, today.isoformat()))
     
     # --- Registrar actividad para Modo Intensivo y Rachas ---
     cursor.execute(
         "INSERT INTO activity_log (username, action_type, timestamp) VALUES (?, 'answer', ?)",
-        (username, datetime.datetime.now())
+        (username, datetime.datetime.now().isoformat())
     )
     update_user_activity(conn, username)
 
@@ -2131,7 +2125,7 @@ def show_evaluation_page():
             st.caption("Solo preguntas vencidas (FSRS). Límite: 30 tarjetas.")
             conn = get_db_conn()
             due_count = conn.execute("SELECT COUNT(*) FROM progress WHERE username = ? AND due_date <= ?", 
-                                   (st.session_state.current_user, datetime.date.today())).fetchone()[0]
+                                   (st.session_state.current_user, datetime.date.today().isoformat())).fetchone()[0]
             conn.close()
             st.metric("Tarjetas Vencidas", due_count)
             
