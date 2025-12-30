@@ -3996,7 +3996,7 @@ def show_admin_panel():
                                 st.caption("Acceso total habilitado.")
                             else:
                                 default_val = val_actual if val_actual < 9999 else 30
-                                nuevos_dias = st.number_input("Días autorizados:", 1, 3650, value=default_val, key=f"days_{username}")
+                                nuevos_dias = st.number_input("Días autorizados:", 1, 3650, value=default_val, key=f"days_cfg_{username}")
                             
                             if st.button("Actualizar Vigencia", key=f"btn_v_{username}"):
                                 new_exp_date_str = '9999-12-31' if is_inf else (datetime.date.today() + datetime.timedelta(days=nuevos_dias)).strftime('%Y-%m-%d')
