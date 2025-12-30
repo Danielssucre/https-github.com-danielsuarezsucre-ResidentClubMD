@@ -15,6 +15,7 @@ import numpy as np
 import shutil
 import re
 import traceback
+import ast # Added for data cleanup
 
 # --- MÓDULOS DEPLOY V1 ---
 import database_manager as dbm
@@ -2602,7 +2603,18 @@ def show_manage_questions_page():
             # Validación Segura Anti-IndexError
             if len(ops) < 4: 
                 ops = ops + ['N/A'] * (4 - len(ops))
-            op_a, op_b, op_c, op_d = ops[0], ops[1], ops[2], ops[3]
+            # Lógica de Limpieza (Data Sanitization)
+            def clean_option(opt_text):
+                try:
+                    if isinstance(opt_text, str) and opt_text.strip().startswith('{'):
+                         # Detectamos corrupción: "{'A': 'Texto'}"
+                        d = ast.literal_eval(opt_text)
+                        return list(d.values())[0] if d else opt_text
+                    return opt_text
+                except:
+                    return opt_text
+
+            op_a, op_b, op_c, op_d = clean_option(ops[0]), clean_option(ops[1]), clean_option(ops[2]), clean_option(ops[3])
             
             op_a = st.text_input("Opción A", value=op_a)
             op_b = st.text_input("Opción B", value=op_b)
