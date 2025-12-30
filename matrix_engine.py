@@ -417,10 +417,10 @@ class MatrixWorker(threading.Thread):
                             print(f"[MATRIZ] -> [DEBUG] Failed Text Segment: {clean_text[:100]}...")
                             return None, f"JSON Error: {json_err}"
                         
-                        except Exception as e:
-                            print(f"[MATRIZ] -> ⚠️ Error inesperado parsing respuesta: {e}")
-                            last_error = f"Parse Error: {str(e)}"
-                            continue
+                    except Exception as e:
+                        print(f"[MATRIZ] -> ⚠️ Error inesperado parsing respuesta: {e}")
+                        last_error = f"Parse Error: {str(e)}"
+                        continue
                         
                 elif response.status_code == 404:
                     print(f"[MATRIZ] -> Modelo {model_name} no encontrado (404). Probando siguiente...")
