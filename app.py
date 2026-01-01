@@ -2318,9 +2318,9 @@ def show_stats_page():
     # --- 0. Recent Accuracy Helper (Lógica Local Refinada) ---
     def get_recent_accuracy(username):
         try:
-            # Extraer últimos 50 logs de respuesta
+            # PASO 3 FIX: Buscar 'answer_submitted' (valor real logueado)
             logs = conn.execute(
-                "SELECT metadata FROM activity_log WHERE username = ? AND action_type = 'answer' ORDER BY timestamp DESC LIMIT 50", 
+                "SELECT metadata FROM activity_log WHERE username = ? AND action_type = 'answer_submitted' ORDER BY timestamp DESC LIMIT 50", 
                 (username,)
             ).fetchall()
             
@@ -3010,9 +3010,9 @@ def show_duels_page():
 
 def get_user_analytics(username):
     conn = get_db_conn()
-    # Traemos los últimos 500 eventos de respuesta
+    # Traemos los últimos 500 eventos de respuesta CON speed_seconds
     query = """
-        SELECT timestamp, metadata 
+        SELECT timestamp, metadata, speed_seconds 
         FROM activity_log 
         WHERE username = ? AND action_type = 'answer_submitted' 
         ORDER BY id ASC
@@ -3026,10 +3026,11 @@ def get_user_analytics(username):
     parsed_data = []
     for index, row in df.iterrows():
         try:
-            meta = json.loads(row['metadata'])
+            meta = json.loads(row['metadata']) if row['metadata'] else {}
             parsed_data.append({
                 'Fecha': pd.to_datetime(row['timestamp']),
-                'Velocidad (s)': float(meta.get('time_seconds', 0)),
+                # FIX: Leer speed_seconds de la columna SQL, fallback a metadata
+                'Velocidad (s)': float(row['speed_seconds'] or meta.get('time_seconds', 0)),
                 'Resultado': meta.get('result', 'unknown'),
                 # Lógica Anti-N/A: Busca 'difficulty' (nuevo) o 'ai_difficulty' (legacy) o fallback
                 'Dificultad': meta.get('difficulty') or meta.get('ai_difficulty') or 'Media',
@@ -4149,12 +4150,12 @@ def show_admin_panel():
     with tab_observatory:
         st.markdown("## 🔭 Observatorio de Rendimiento (Consultoría)")
     
-        # Selector Dinámico: Busca en logs para ver invitados como 'Guest_Ganador_Previo'
-        users_list_df = pd.read_sql_query("SELECT DISTINCT username FROM activity_log ORDER BY username", conn)
+        # PASO 1 FIX: Selector Dinámico basado en USUARIOS REGISTRADOS (no logs)
+        users_list_df = pd.read_sql_query("SELECT DISTINCT username FROM users WHERE role != 'admin' AND status = 'active' ORDER BY username", conn)
         all_users = users_list_df['username'].tolist()
         
         # Filtrar cuentas técnicas o irrelevantes
-        all_users = [u for u in all_users if u not in ['guest_mode', 'usuario_test']]
+        all_users = [u for u in all_users if u not in ['guest_mode', 'usuario_test', 'Matrix_AI', 'QA_Tester_Metrics']]
         
         if all_users:
             tgt_user = st.selectbox("Seleccionar Usuario a Espiar:", all_users, index=0, key="observatory_user_select")
