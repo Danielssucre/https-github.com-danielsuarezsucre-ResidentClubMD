@@ -1675,10 +1675,12 @@ def clear_evaluation_memory():
 
 def render_question_card(question_id):
     # --- SENSOR DE INICIO (CRONÓMETRO TELEMETRÍA) ---
-    # Usamos el ID de la pregunta para crear un timer único
-    start_key = f"timer_start_{question_id}"
-    if start_key not in st.session_state:
-        st.session_state[start_key] = time.time() # Usar time.time() para precisión
+    # Inyectar tiempo de inicio para cálculo de velocidad
+    if f"timer_start_{question_id}" not in st.session_state:
+        st.session_state[f"timer_start_{question_id}"] = time.time()
+    
+    # Asegurar refresh del timer si se recarga la carta
+    st.session_state.start_time = time.time()
     
     # --- LÓGICA AUTO-CURABLE (ANTI-ZOMBIE) ---
     # Detectamos si la tarjeta cree que ya terminó ('done') pero se le ha pedido renderizar de nuevo.
@@ -1835,8 +1837,13 @@ def render_question_card(question_id):
                 is_correct = (user_choice == correct_option_with_prefix)
 
                 # Calcular tiempo transcurrido (Telemetría)
-                start_time_val = st.session_state.get(start_key, time.time())
+                start_time_val = st.session_state.get(f"timer_start_{question_id}", time.time())
+                # Fallback a session start_time si existe
+                if 'start_time' in st.session_state:
+                     start_time_val = st.session_state.start_time
+                
                 elapsed = time.time() - start_time_val
+                if elapsed < 0: elapsed = 0.0
                 
                 # Crear una etiqueta de perfil dinámica
                 if st.session_state.get('user_role') == 'guest':
@@ -2409,7 +2416,6 @@ def show_stats_page():
         LEFT JOIN 
             progress p ON u.username = p.username
         WHERE
-        WHERE
             u.role != 'admin' AND u.status = 'active' AND u.username != 'guest_mode'
             AND u.username NOT LIKE 'QA_%' AND u.username NOT LIKE 'Test_%'
         GROUP BY
@@ -2424,7 +2430,9 @@ def show_stats_page():
 
     # 3. Transformación y Cálculo de Métricas v2.0
     df['total_answers'] = df['total_aciertos'] + df['total_fallos']
-    df['accuracy'] = (df['total_aciertos'] / df['total_answers'] * 100).fillna(0.0)
+    # Precisión Dinámica Real (Suma Total / Total Respuestas)
+    # Evita 0 division error y usa datos agregados
+    df['accuracy'] = (df['total_aciertos'] * 100.0 / df['total_answers'].replace(0, 1)).fillna(0.0)
     
     # MAESTRÍA PONDERADA: (Estabilidad Promedio / 21) * 100
     # Refleja la solidez de la memoria, no solo el conteo. 21 días es un horizonte "fuerte".
@@ -4306,50 +4314,58 @@ def show_admin_panel():
                     
                     # Opcional: Resetear también los temas
                     reset_topics = st.checkbox("Reiniciar estado de Temas a 'PENDIENTE' (Para regenerar)", value=False)
-                    if safety_phrase == "BORRAR TODO":
-                        if st.form_submit_button("☢️ EJECUTAR VACIADO TOTAL", type="primary"):
+                    
+                    # Botón Confirmación dentro del form
+                    confirmar_vaciado = st.form_submit_button("🚀 EJECUTAR VACIADO TOTAL", type="primary")
+
+                    if confirmar_vaciado:
+                        if safety_phrase == "BORRAR TODO":
                             conn = get_db_conn()
                             try:
-                                # Cascade Delete Order: Child -> Parent
+                                # Cascade Delete Order: Logs -> Progress-> Questions (User Request V4.0)
                                 st.warning("Iniciando protocolo de vaciado en cascada...")
                                 
-                                # 1. Progreso FSRS (Child of Users & Questions)
-                                conn.execute("DELETE FROM progress")
-                                conn.execute("DELETE FROM sqlite_sequence WHERE name='progress'")
-                                st.toast("✅ Progreso eliminado.")
-
-                                # 2. Logs de Actividad
+                                # 1. Logs de Actividad
                                 conn.execute("DELETE FROM activity_log")
                                 conn.execute("DELETE FROM sqlite_sequence WHERE name='activity_log'")
                                 st.toast("✅ Logs eliminados.")
                                 
-                                # 3. Preguntas (Parent)
+                                # 2. Progreso FSRS
+                                conn.execute("DELETE FROM progress")
+                                conn.execute("DELETE FROM sqlite_sequence WHERE name='progress'")
+                                st.toast("✅ Progreso eliminado.")
+                                
+                                # 3. Preguntas
                                 conn.execute("DELETE FROM questions")
                                 conn.execute("DELETE FROM sqlite_sequence WHERE name='questions'")
                                 st.toast("✅ Preguntas eliminadas.")
                                 
-                                # 4. Duelos (Opcional, limpieza higiene)
+                                # 4. Duelos y Otros
                                 conn.execute("DELETE FROM duels")
                                 
-                                # 5. Resetear Temas (Opcional)
                                 if reset_topics:
-                                    conn_nuke.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = NULL")
+                                    conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = NULL")
                                 
-                                # 3. Log de Auditoría
-                                conn_nuke.execute(
+                                # Log de Auditoría Post-Mortem (Re-inserting nuclear log)
+                                import json
+                                conn.execute(
                                     "INSERT INTO activity_log (username, action_type, metadata, timestamp) VALUES (?, ?, ?, ?)",
-                                    (st.session_state.current_user, 'NUCLEAR_RESET', json.dumps({'deleted_questions': deleted_rows, 'reset_topics': reset_topics}), datetime.datetime.now())
+                                    (st.session_state.current_user, 'NUCLEAR_RESET', json.dumps({'reset_topics': reset_topics}), datetime.datetime.now())
                                 )
-                                conn_nuke.commit()
-                                st.success(f"☢️ SISTEMA PURGADO. {deleted_rows} preguntas eliminadas.")
+                                conn.commit()
+                                st.success("✅ ¡BASE DE DATOS VACIADA CORRECTAMENTE!")
+                                st.cache_data.clear()
                                 time.sleep(2)
                                 st.rerun()
+                                
                             except Exception as e:
-                                st.error(f"Error crítico durante el vaciado: {e}")
+                                st.error(f"Error crítico en vaciado: {e}")
+                                if conn: conn.rollback()
                             finally:
-                                conn_nuke.close()
+                                if conn: conn.close()
                         else:
-                            st.error("⛔ Frase de seguridad incorrecta. No se hizo nada.")
+                            st.error("Frase de seguridad incorrecta. No se ha borrado nada.")
+
             else:
                 st.error("Espacio restringido a Super-Admin.")
 
