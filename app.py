@@ -4253,6 +4253,8 @@ def show_admin_panel():
 
         @st.cache_data
         def generate_excel_export():
+            # Fix Scope Issue: Asegurar que json está disponible localmente
+            import json 
             output = io.BytesIO()
             conn_export = get_db_conn()
             try:
@@ -4264,6 +4266,7 @@ def show_admin_panel():
 
                     df_logs = pd.read_sql_query("SELECT * FROM activity_log", conn_export)
 
+                    # Procesamiento Seguro de JSON
                     if not df_logs.empty and 'metadata' in df_logs.columns:
                         def safe_json_load(x):
                             try:
@@ -4273,14 +4276,22 @@ def show_admin_panel():
                                 pass
                             return {}
 
-                        df_meta = pd.json_normalize(df_logs['metadata'].apply(safe_json_load))
-                        df_logs = df_logs.join(df_meta)
-                        rename_map = {'time_seconds': 'Velocidad (s)', 'topic': 'Tema', 'result': 'Resultado', 'difficulty_rating': 'Dificultad'}
-                        existing_renames = {k: v for k, v in rename_map.items() if k in df_logs.columns}
-                        if existing_renames:
-                            df_logs.rename(columns=existing_renames, inplace=True)
-                        if 'metadata' in df_logs.columns:
-                            df_logs.drop(columns=['metadata'], inplace=True)
+                        try:
+                            # Expansion de columnas JSON
+                            df_meta = pd.json_normalize(df_logs['metadata'].apply(safe_json_load))
+                            df_logs = df_logs.join(df_meta)
+                            
+                            # Renombrado amigable
+                            rename_map = {'time_seconds': 'Velocidad (s)', 'speed_seconds': 'Velocidad (s)', 'topic': 'Tema', 'result': 'Resultado', 'difficulty_rating': 'Dificultad'}
+                            existing_renames = {k: v for k, v in rename_map.items() if k in df_logs.columns}
+                            if existing_renames:
+                                df_logs.rename(columns=existing_renames, inplace=True)
+                                
+                            # Limpieza final
+                            if 'metadata' in df_logs.columns:
+                                df_logs.drop(columns=['metadata'], inplace=True)
+                        except Exception as e:
+                            st.warning(f"Advertencia: No se pudieron expandir los metadatos JSON ({e}). Se exportará sin detalles.")
                     
                     df_logs.to_excel(writer, sheet_name='Telemetría', index=False)
             finally:
