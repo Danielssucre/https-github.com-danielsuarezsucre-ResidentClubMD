@@ -666,6 +666,7 @@ def setup_database():
 
     # Migracion para la tabla 'activity_log'
     add_column_if_not_exists('activity_log', 'metadata', 'TEXT')
+    add_column_if_not_exists('activity_log', 'speed_seconds', 'REAL DEFAULT 0.0') # New Telemetry Column
 
     # Migracion para la tabla 'matrix_topics'
     add_column_if_not_exists('matrix_topics', 'target_category', 'TEXT')
@@ -937,9 +938,9 @@ def delete_user_from_db(username):
             conn.close()
 
 
-def log_event(user_id, event_type, metadata_dict=None):
+def log_event(user_id, event_type, metadata_dict=None, speed_seconds=0.0):
     """
-    Registra un evento genérico en el activity_log con metadatos JSON.
+    Registra un evento genérico en el activity_log con metadatos JSON y telemetría de velocidad.
     """
     conn = None
     try:
@@ -953,10 +954,10 @@ def log_event(user_id, event_type, metadata_dict=None):
         conn = get_db_conn()
         cursor = conn.cursor()
         
-        # Inserta el nuevo evento incluyendo los metadatos.
+        # Inserta el nuevo evento incluyendo los metadatos y la velocidad.
         cursor.execute(
-            "INSERT INTO activity_log (username, action_type, timestamp, metadata) VALUES (?, ?, ?, ?)",
-            (user_id, event_type, datetime.datetime.now(), meta_json)
+            "INSERT INTO activity_log (username, action_type, timestamp, metadata, speed_seconds) VALUES (?, ?, ?, ?, ?)",
+            (user_id, event_type, datetime.datetime.now(), meta_json, speed_seconds)
         )
         conn.commit()
     
@@ -1673,11 +1674,11 @@ def clear_evaluation_memory():
             del st.session_state[key]
 
 def render_question_card(question_id):
-    # --- SENSOR DE INICIO (CRONÓMETRO) ---
+    # --- SENSOR DE INICIO (CRONÓMETRO TELEMETRÍA) ---
     # Usamos el ID de la pregunta para crear un timer único
     start_key = f"timer_start_{question_id}"
     if start_key not in st.session_state:
-        st.session_state[start_key] = datetime.datetime.now()
+        st.session_state[start_key] = time.time() # Usar time.time() para precisión
     
     # --- LÓGICA AUTO-CURABLE (ANTI-ZOMBIE) ---
     # Detectamos si la tarjeta cree que ya terminó ('done') pero se le ha pedido renderizar de nuevo.
@@ -1833,6 +1834,10 @@ def render_question_card(question_id):
                 # --- AUDITORÍA DE DATOS: Validación y Registro de Perfil ---
                 is_correct = (user_choice == correct_option_with_prefix)
 
+                # Calcular tiempo transcurrido (Telemetría)
+                start_time_val = st.session_state.get(start_key, time.time())
+                elapsed = time.time() - start_time_val
+                
                 # Crear una etiqueta de perfil dinámica
                 if st.session_state.get('user_role') == 'guest':
                     paso_examen = st.session_state.get('guest_profile_passed', False)
@@ -1846,7 +1851,7 @@ def render_question_card(question_id):
                     'result': 'correct' if is_correct else 'incorrect',
                     'difficulty': pregunta.get('difficulty_level', 'Media'),
                     'topic': pregunta.get('tag_tema', 'General')
-                })
+                }, speed_seconds=elapsed)
                 # -----------------------------------------------------------
 
                 # --- MINERÍA DE DATOS (FASE 3) ---
@@ -2404,7 +2409,9 @@ def show_stats_page():
         LEFT JOIN 
             progress p ON u.username = p.username
         WHERE
+        WHERE
             u.role != 'admin' AND u.status = 'active' AND u.username != 'guest_mode'
+            AND u.username NOT LIKE 'QA_%' AND u.username NOT LIKE 'Test_%'
         GROUP BY
             u.username, u.is_resident, u.is_reference_model, u.total_active_days, u.current_streak
     """
@@ -4299,16 +4306,32 @@ def show_admin_panel():
                     
                     # Opcional: Resetear también los temas
                     reset_topics = st.checkbox("Reiniciar estado de Temas a 'PENDIENTE' (Para regenerar)", value=False)
-                    
-                    if st.form_submit_button("💥 EJECUTAR VACIADO TOTAL", type="primary"):
-                        if safety_phrase == "BORRAR TODO":
-                            conn_nuke = get_db_conn()
+                    if safety_phrase == "BORRAR TODO":
+                        if st.form_submit_button("☢️ EJECUTAR VACIADO TOTAL", type="primary"):
+                            conn = get_db_conn()
                             try:
-                                # 1. Borrar Preguntas
-                                conn_nuke.execute("DELETE FROM questions")
-                                deleted_rows = conn_nuke.total_changes
+                                # Cascade Delete Order: Child -> Parent
+                                st.warning("Iniciando protocolo de vaciado en cascada...")
                                 
-                                # 2. Resetear Temas (Opcional)
+                                # 1. Progreso FSRS (Child of Users & Questions)
+                                conn.execute("DELETE FROM progress")
+                                conn.execute("DELETE FROM sqlite_sequence WHERE name='progress'")
+                                st.toast("✅ Progreso eliminado.")
+
+                                # 2. Logs de Actividad
+                                conn.execute("DELETE FROM activity_log")
+                                conn.execute("DELETE FROM sqlite_sequence WHERE name='activity_log'")
+                                st.toast("✅ Logs eliminados.")
+                                
+                                # 3. Preguntas (Parent)
+                                conn.execute("DELETE FROM questions")
+                                conn.execute("DELETE FROM sqlite_sequence WHERE name='questions'")
+                                st.toast("✅ Preguntas eliminadas.")
+                                
+                                # 4. Duelos (Opcional, limpieza higiene)
+                                conn.execute("DELETE FROM duels")
+                                
+                                # 5. Resetear Temas (Opcional)
                                 if reset_topics:
                                     conn_nuke.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = NULL")
                                 
