@@ -4695,10 +4695,17 @@ def main():
         # Botón de Salida (Logout)
         if st.sidebar.button("🚪 Cerrar Sesión", type="primary", use_container_width=True):
             clear_evaluation_memory() # Limpieza total antes de salir
+            
+            # NUCLEAR SESSION CLEANUP: Prevenir fuga de datos entre usuarios
+            keys_to_preserve = {'rerun_count', 'cache_cleared_session'}  # Solo keys técnicas
+            keys_to_delete = [k for k in st.session_state.keys() if k not in keys_to_preserve]
+            for k in keys_to_delete:
+                del st.session_state[k]
+            
+            # Reinicializar estado mínimo
             st.session_state.logged_in = False
             st.session_state.current_user = None
             st.session_state.user_role = None
-            # No es necesario limpiar más, st.rerun() cargará la página de login limpia.
             st.rerun()
 
         page_functions = {

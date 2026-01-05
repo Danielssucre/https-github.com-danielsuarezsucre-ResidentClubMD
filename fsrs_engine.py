@@ -115,8 +115,8 @@ def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO')
 
             if practice_question:
                 return {'id': practice_question['id'], 'is_advance': False}
-            if question:
-                return {'id': question['id'], 'is_advance': False}
+            # No practice question found - fall through to standard logic or return None
+            return None
 
         # --- Paso C: Lógica STANDARD (Si mode != 'MAFU') ---
         else:
