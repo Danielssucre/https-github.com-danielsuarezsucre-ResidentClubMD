@@ -2362,15 +2362,15 @@ def show_stats_page():
             print(f"Error calculating recent acc: {e}")
             return 0.0
 
-    # --- 1. Datos Radar (Normalizado por Categoría) ---
-    # Cambiamos "preguntas_dominadas" a promedio de estabilidad relativa? No, el usuario pidió:
-    # "si el usuario solo ha estudiado 'Cardiología', el radar debe mostrar el dominio de esa categoría al 100% de su progreso"
-    # Manteniendo lógica de conteo pero dividiendo sobre TOTAL VISTO, no total banco.
+    # --- 1. Datos Radar (Rediseño: Basado en Estabilidad + Fallback Robusto) ---
+    # El Radar muestra el progreso de dominio por categoría usando estabilidad promedio.
+    # Escala: 0-21 días de estabilidad = 0-100% dominio visual.
     sql_radar = """
         SELECT
             q.tag_categoria AS tag,
             COUNT(*) as total_vistas,
-            SUM(CASE WHEN p.interval > 3 THEN 1 ELSE 0 END) as preguntas_dominadas 
+            COALESCE(AVG(p.stability), 0) as avg_stability,
+            SUM(CASE WHEN p.interval > 3 THEN 1 ELSE 0 END) as dominadas
         FROM questions q
         JOIN progress p ON q.id = p.question_id
         WHERE
@@ -2378,19 +2378,26 @@ def show_stats_page():
             AND q.tag_categoria IS NOT NULL
             AND q.tag_categoria != ''
             AND p.username = ?
-        GROUP BY tag
+        GROUP BY q.tag_categoria
         ORDER BY total_vistas DESC
         LIMIT 6
     """
     df_radar = pd.read_sql_query(sql_radar, conn, params=(st.session_state.current_user,))
 
-    if not df_radar.empty:
-        # Normalización Real: Dominio sobre lo VISTO
-        df_radar['Puntaje'] = (df_radar['preguntas_dominadas'] / df_radar['total_vistas']) * 100
+    col_rad, col_metrics = st.columns([1, 1])
+    
+    with col_rad:
+        st.subheader("🎯 Tu Radar Clínico")
         
-        col_rad, col_metrics = st.columns([1, 1])
-        with col_rad:
-            st.subheader("🎯 Tu Radar Clínico")
+        if not df_radar.empty and df_radar['total_vistas'].sum() > 0:
+            # Puntaje basado en estabilidad normalizada (21 días = 100% dominio)
+            df_radar['Puntaje'] = (df_radar['avg_stability'] / 21.0 * 100).clip(0, 100)
+            
+            # Fallback: Si estabilidad es 0 pero hay dominadas, usar esa métrica
+            for idx, row in df_radar.iterrows():
+                if row['Puntaje'] == 0 and row['dominadas'] > 0:
+                    df_radar.at[idx, 'Puntaje'] = (row['dominadas'] / row['total_vistas']) * 100
+            
             fig = px.line_polar(
                 df_radar,
                 r='Puntaje',
@@ -2398,24 +2405,29 @@ def show_stats_page():
                 line_close=True,
                 range_r=[0, 100],
             )
-            fig.update_traces(fill='toself')
+            fig.update_traces(fill='toself', line_color='#00D4AA')
+            fig.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                showlegend=False,
+                margin=dict(l=40, r=40, t=20, b=40)
+            )
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            # Fallback: Mostrar placeholder con mensaje motivacional
+            st.info("📊 Responde preguntas de diferentes especialidades para activar tu Radar Clínico.")
             
-        with col_metrics:
-            st.subheader("⚡ Pulso Actual")
-            acc_recent = get_recent_accuracy(st.session_state.current_user)
-            st.metric("Precisión Reciente (Últimas 50)", f"{acc_recent:.1f}%", help="Tu rendimiento en tiempo real.")
-            
-            # Widget de Próximo Repaso (Estimado)
-            next_rev_date = conn.execute("SELECT MIN(due_date) FROM progress WHERE username = ? AND due_date > ?", (st.session_state.current_user, datetime.date.today().strftime('%Y-%m-%d'))).fetchone()[0]
-            if next_rev_date:
-                 delta = (datetime.datetime.strptime(next_rev_date, '%Y-%m-%d').date() - datetime.date.today()).days
-                 st.metric("Próximo Repaso FSRS", f"En {delta} días", "Sigue así")
-            else:
-                 st.metric("Próximo Repaso", "Al día", "¡Excelente!")
-
-    else:
-        st.info("Responde preguntas de diferentes temas para activar tu Radar Clínico.")
+    with col_metrics:
+        st.subheader("⚡ Pulso Actual")
+        acc_recent = get_recent_accuracy(st.session_state.current_user)
+        st.metric("Precisión Reciente (Últimas 50)", f"{acc_recent:.1f}%", help="Tu rendimiento calculado desde tu historial.")
+        
+        # Widget de Próximo Repaso (Estimado)
+        next_rev_date = conn.execute("SELECT MIN(due_date) FROM progress WHERE username = ? AND due_date > ?", (st.session_state.current_user, datetime.date.today().strftime('%Y-%m-%d'))).fetchone()[0]
+        if next_rev_date:
+             delta = (datetime.datetime.strptime(next_rev_date, '%Y-%m-%d').date() - datetime.date.today()).days
+             st.metric("Próximo Repaso FSRS", f"En {delta} días", "↑ Sigue así")
+        else:
+             st.metric("Próximo Repaso", "Al día", "¡Excelente!")
     
     # 2. Extracción de Datos Granulares (Ranking Global)
     total_questions_global = conn.execute("SELECT COUNT(*) as count FROM questions WHERE status = 'active'").fetchone()['count']
