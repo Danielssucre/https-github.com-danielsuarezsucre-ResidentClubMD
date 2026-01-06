@@ -8,18 +8,17 @@ import streamlit as st
 IS_RENDER = os.environ.get('RENDER', False)
 
 # Ruta de la Base de Datos
-# El usuario solicitó EXPLICITAMENTE /var/data/prisma_srs.db para producción
-# Nota: En Render, un Disco montado en /var/data debe existir.
-DB_PATH_RENDER = "/var/data/prisma_srs.db"
+# CORRECCIÓN: Render monta discos persistentes en /opt/render/data/
+DB_PATH_RENDER = "/opt/render/data/prisma_srs.db"
 DB_PATH_LOCAL = "prisma_srs.db"
 
 # Lógica de Selección de Ruta
 if IS_RENDER:
     if os.path.exists(os.path.dirname(DB_PATH_RENDER)):
          DB_PATH = DB_PATH_RENDER
+         print(f"✅ RENDER: Usando disco persistente en {DB_PATH}")
     else:
-         # Fallback silencioso si no existe el directori (ej: Build step)
-         # Pero alertamos para runtime
+         # Fallback silencioso si no existe el directorio
          print(f"⚠️ ADVERTENCIA RENDER: No se encuentra {DB_PATH_RENDER}. Usando path local temporal.")
          DB_PATH = DB_PATH_LOCAL
 else:
