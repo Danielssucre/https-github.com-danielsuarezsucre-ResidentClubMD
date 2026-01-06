@@ -2317,27 +2317,47 @@ def show_stats_page():
 
     # --- 0. Recent Accuracy Helper (Lógica Local Refinada) ---
     def get_recent_accuracy(username):
+        """
+        Calcula precisión reciente. Intenta activity_log primero, fallback a progress.
+        """
         try:
-            # PASO 3 FIX: Buscar 'answer_submitted' (valor real logueado)
+            # Intento 1: Desde activity_log (últimas 50 respuestas)
             logs = conn.execute(
                 "SELECT metadata FROM activity_log WHERE username = ? AND action_type = 'answer_submitted' ORDER BY timestamp DESC LIMIT 50", 
                 (username,)
             ).fetchall()
             
-            if not logs: return 0.0
+            if logs:
+                correct = 0
+                total_parsed = 0
+                import json
+                for log in logs:
+                    try:
+                        meta = json.loads(log['metadata']) if log['metadata'] else {}
+                        if isinstance(meta, dict):
+                            if meta.get('is_correct') == 1 or meta.get('result') == 'correct':
+                                correct += 1
+                            total_parsed += 1
+                    except:
+                        pass  # Metadata corrupta, ignorar
+                
+                if total_parsed > 0:
+                    return (correct / total_parsed * 100)
             
-            correct = 0
-            total = len(logs)
-            import json
-            for log in logs:
-                try:
-                    meta = json.loads(log['metadata']) if log['metadata'] else {}
-                    if meta.get('is_correct') == 1:
-                        correct += 1
-                except:
-                    pass
+            # Fallback: Desde tabla progress (datos acumulados)
+            progress = conn.execute(
+                "SELECT SUM(aciertos) as a, SUM(fallos) as f FROM progress WHERE username = ?",
+                (username,)
+            ).fetchone()
             
-            return (correct / total * 100) if total > 0 else 0.0
+            if progress and (progress['a'] or progress['f']):
+                aciertos = progress['a'] or 0
+                fallos = progress['f'] or 0
+                total = aciertos + fallos
+                if total > 0:
+                    return (aciertos / total * 100)
+            
+            return 0.0
         except Exception as e:
             print(f"Error calculating recent acc: {e}")
             return 0.0
