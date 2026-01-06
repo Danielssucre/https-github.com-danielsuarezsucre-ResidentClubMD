@@ -1425,7 +1425,7 @@ def show_login_page():
                             is_in_grace_period = True
 
                     if not is_in_grace_period:
-                        score, _, _ = calculate_user_score(clean_username, user['max_inactivity_days'])
+                        score, _, _, _ = calculate_user_score(clean_username, user['max_inactivity_days'])
                         last_activity_row = conn.execute("SELECT MAX(timestamp) as last_ts FROM activity_log WHERE username = ?", (clean_username,)).fetchone()
                         is_inactive = False
                         if last_activity_row and last_activity_row['last_ts']:
@@ -4092,7 +4092,7 @@ def show_admin_panel():
                         username = user_row['username']
                         st.markdown("---")
                         
-                        score, _, _ = calculate_user_score(username, user_row['max_inactivity_days'])
+                        score, _, _, _ = calculate_user_score(username, user_row['max_inactivity_days'])
                         reason = f"Puntaje de productividad bajo ({score}/30)"
                         
                         container = st.container(border=True)
