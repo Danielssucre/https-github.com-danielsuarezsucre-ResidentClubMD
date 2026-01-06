@@ -88,10 +88,10 @@ def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO')
             # COPIAR LOGICA EXISTENTE DE PRÁCTICA AQUÍ (Simplificando el patch para no borrarla)
             # Como la herramienta replace reemplaza TODO el bloque, debo incluir la lógica de práctica.
             
-            # Caso A: Tag Único
+            # Caso A: Tag Único - FIX: Usar LIKE para acentos
             if st.session_state.get('selected_tag'):
                 tag = st.session_state.selected_tag
-                cursor.execute("SELECT id FROM questions WHERE tag_tema = ? AND status = 'active' ORDER BY RANDOM() LIMIT 1", (tag,))
+                cursor.execute("SELECT id FROM questions WHERE (tag_tema = ? OR tag_tema LIKE ?) AND status = 'active' ORDER BY RANDOM() LIMIT 1", (tag, f"%{tag}%"))
                 practice_question = cursor.fetchone()
             # Caso B: Especialidad
             elif st.session_state.get('practice_specialty'):
