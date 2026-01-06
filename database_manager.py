@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import shutil
 import pandas as pd
 import streamlit as st
 
@@ -11,6 +12,7 @@ IS_RENDER = os.environ.get('RENDER', False)
 # CORRECCIÓN: Render monta discos persistentes en /opt/render/data/
 DB_PATH_RENDER = "/opt/render/data/prisma_srs.db"
 DB_PATH_LOCAL = "prisma_srs.db"
+SEED_DB_PATH = os.path.join(os.path.dirname(__file__), "seed_database.db")
 
 # Lógica de Selección de Ruta
 if IS_RENDER:
@@ -23,6 +25,46 @@ if IS_RENDER:
          DB_PATH = DB_PATH_LOCAL
 else:
     DB_PATH = DB_PATH_LOCAL
+
+# --- MIGRACIÓN AUTOMÁTICA DE SEED DATABASE ---
+def _check_and_seed_database():
+    """
+    Si la BD de producción está vacía o no existe, copia el seed_database.db bundleado.
+    Esto es una migración ONE-TIME para restaurar datos de backup.
+    """
+    if not os.path.exists(SEED_DB_PATH):
+        print("ℹ️ No hay seed_database.db para migrar.")
+        return
+    
+    need_seed = False
+    
+    if not os.path.exists(DB_PATH):
+        need_seed = True
+        print(f"📦 BD no existe en {DB_PATH}. Se usará seed.")
+    else:
+        # Verificar si la BD está vacía (0 preguntas)
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=10)
+            count = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
+            conn.close()
+            if count == 0:
+                need_seed = True
+                print(f"📦 BD vacía detectada ({count} preguntas). Se usará seed.")
+            else:
+                print(f"✅ BD tiene {count} preguntas. No se necesita seed.")
+        except Exception as e:
+            need_seed = True
+            print(f"⚠️ Error leyendo BD: {e}. Se usará seed.")
+    
+    if need_seed:
+        try:
+            shutil.copy2(SEED_DB_PATH, DB_PATH)
+            print(f"✅ SEED MIGRATION: Copiado seed_database.db -> {DB_PATH}")
+        except Exception as e:
+            print(f"❌ Error copiando seed: {e}")
+
+# Ejecutar migración al importar el módulo
+_check_and_seed_database()
 
 def get_db_conn():
     """
