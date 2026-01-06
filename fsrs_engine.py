@@ -98,18 +98,23 @@ def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO')
                 specialty = st.session_state.practice_specialty
                 answered_ids = st.session_state.get('session_answered_ids', [])
                 
-                clean_spec = specialty.lower().replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u')
-                search_root = clean_spec[:6] if len(clean_spec) > 6 else clean_spec
-                search_pattern = f"{search_root}%"
-                
-                params = [search_pattern]
+                # FIX: Buscar por coincidencia exacta O por prefijo flexible
+                # SQLite LOWER() no maneja acentos, así que usamos LIKE con el valor original
+                params = [f"%{specialty}%", specialty]
                 exclude_clause = ""
                 if answered_ids:
                     placeholders_exclude = ','.join(['?'] * len(answered_ids))
                     exclude_clause = f"AND id NOT IN ({placeholders_exclude})"
                     params.extend(answered_ids)
                 
-                query = f"SELECT id FROM questions WHERE LOWER(tag_categoria) LIKE ? {exclude_clause} AND status = 'active' ORDER BY RANDOM() LIMIT 1"
+                # Buscar por coincidencia parcial O exacta
+                query = f"""
+                    SELECT id FROM questions 
+                    WHERE (tag_categoria LIKE ? OR tag_categoria = ?) 
+                    {exclude_clause} 
+                    AND status = 'active' 
+                    ORDER BY RANDOM() LIMIT 1
+                """
                 cursor.execute(query, params)
                 practice_question = cursor.fetchone()
 
