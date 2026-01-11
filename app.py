@@ -2149,28 +2149,40 @@ def show_evaluation_page():
         with col_new:
             st.markdown("**📚 Preguntas Nuevas (CMTG-5)**")
             st.caption(f"Disponibles: {new_available:,}")
-            limit_new = st.slider(
-                "¿Cuántas nuevas hoy?",
-                min_value=0,
-                max_value=min(100, new_available),
-                value=min(50, new_available),
-                step=5,
-                key="slider_limit_new",
-                help="Preguntas que nunca has visto. Prioridad máxima."
-            )
+            
+            # FIX: Prevenir crash cuando new_available = 0
+            if new_available > 0:
+                limit_new = st.slider(
+                    "¿Cuántas nuevas hoy?",
+                    min_value=0,
+                    max_value=min(100, new_available),
+                    value=min(50, new_available),
+                    step=5,
+                    key="slider_limit_new",
+                    help="Preguntas que nunca has visto. Prioridad máxima."
+                )
+            else:
+                st.info("📭 No hay preguntas nuevas disponibles.")
+                limit_new = 0
         
         with col_rev:
             st.markdown("**🔄 Repasos Vencidos (FSRS)**")
             st.caption(f"Pendientes: {reviews_due:,}")
-            limit_reviews = st.slider(
-                "¿Cuántos repasos para esta sesión?",
-                min_value=0,
-                max_value=min(100, reviews_due) if reviews_due > 0 else 0,
-                value=min(30, reviews_due) if reviews_due > 0 else 0,
-                step=5,
-                key="slider_limit_reviews",
-                help="Repasos ordenados por urgencia (menor estabilidad primero)."
-            )
+            
+            # FIX: Prevenir crash cuando reviews_due = 0 (slider con rango vacío)
+            if reviews_due > 0:
+                limit_reviews = st.slider(
+                    "¿Cuántos repasos para esta sesión?",
+                    min_value=0,
+                    max_value=min(100, reviews_due),
+                    value=min(30, reviews_due),
+                    step=5,
+                    key="slider_limit_reviews",
+                    help="Repasos ordenados por urgencia (menor estabilidad primero)."
+                )
+            else:
+                st.success("✅ No tienes repasos pendientes. ¡Estás al día!")
+                limit_reviews = 0
         
         # Resumen de Sesión
         total_session = limit_new + limit_reviews
