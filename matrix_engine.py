@@ -250,10 +250,18 @@ class MatrixWorker(threading.Thread):
         if not prompt_template:
             prompt_template = "Genera 5 preguntas de opción múltiple sobre {topic_name} para médicos residentes. Nivel Difícil. Formato JSON lista: enunciado, opciones, correcta, retroalimentacion."
 
-        # Modificación para forzar 5 preguntas si el template no lo especifica
-        # O confiar en el template del usuario. Asumimos el template del usuario o el default.
         # USAMOS .replace() en lugar de .format() para evitar KeyError si el prompt tiene JSON brackets {}
         final_prompt = prompt_template.replace("{topic_name}", topic_name)
+        
+        # [DEBUG] Log para auditoría - Ver qué se está enviando
+        print(f"[MATRIZ] -> [DEBUG] topic_name length: {len(topic_name)} chars")
+        print(f"[MATRIZ] -> [DEBUG] final_prompt length: {len(final_prompt)} chars")
+        print(f"[MATRIZ] -> [DEBUG] topic_name preview: {topic_name[:200]}..." if len(topic_name) > 200 else f"[MATRIZ] -> [DEBUG] topic_name: {topic_name}")
+        
+        # Verificar que el texto se insertó correctamente
+        if "{topic_name}" in final_prompt:
+            print("[MATRIZ] -> ⚠️ WARNING: {topic_name} placeholder was NOT replaced!")
+        
         
         # --- FASE 2: GENERACIÓN (API - SIN DB) ---
         # --- FASE 2 & 3: GENERACIÓN Y PERSISTENCIA (CON RETRY) ---
