@@ -2095,7 +2095,10 @@ def render_question_card(question_id):
                         'is_resident': is_resident_audit
                     })
                     handle_srs_update("difícil")
-                    next_question_requested = True
+                    # FIX: Forzar siguiente pregunta
+                    if 'current_eval_question_data' in st.session_state:
+                        del st.session_state.current_eval_question_data
+                    st.rerun()
                 if srs_cols[1].button("Medio", key=f"srs_mid_{question_id}"):
                     log_event(st.session_state.current_user, 'difficulty_rated', {
                         'question_id': question_id,
@@ -2103,7 +2106,10 @@ def render_question_card(question_id):
                         'is_resident': is_resident_audit
                     })
                     handle_srs_update("medio")
-                    next_question_requested = True
+                    # FIX: Forzar siguiente pregunta
+                    if 'current_eval_question_data' in st.session_state:
+                        del st.session_state.current_eval_question_data
+                    st.rerun()
                 if srs_cols[2].button("Fácil", key=f"srs_easy_{question_id}"):
                     log_event(st.session_state.current_user, 'difficulty_rated', {
                         'question_id': question_id,
@@ -2111,7 +2117,10 @@ def render_question_card(question_id):
                         'is_resident': is_resident_audit
                     })
                     handle_srs_update("fácil")
-                    next_question_requested = True
+                    # FIX: Forzar siguiente pregunta
+                    if 'current_eval_question_data' in st.session_state:
+                        del st.session_state.current_eval_question_data
+                    st.rerun()
 
     return next_question_requested
 
