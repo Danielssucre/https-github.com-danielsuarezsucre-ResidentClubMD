@@ -2532,6 +2532,30 @@ def show_stats_page():
     dias_restantes = pendientes / v_avg
     fecha_estimada = datetime.date.today() + datetime.timedelta(days=int(dias_restantes))
     
+    # Helper: Traducción de fechas a español
+    def fecha_espanol(fecha, formato='corto'):
+        """Convierte fecha a formato español sin depender de locale del servidor."""
+        MESES_CORTOS = {
+            'Jan': 'Ene', 'Feb': 'Feb', 'Mar': 'Mar', 'Apr': 'Abr',
+            'May': 'May', 'Jun': 'Jun', 'Jul': 'Jul', 'Aug': 'Ago',
+            'Sep': 'Sep', 'Oct': 'Oct', 'Nov': 'Nov', 'Dec': 'Dic'
+        }
+        MESES_LARGOS = {
+            'January': 'Enero', 'February': 'Febrero', 'March': 'Marzo',
+            'April': 'Abril', 'May': 'Mayo', 'June': 'Junio',
+            'July': 'Julio', 'August': 'Agosto', 'September': 'Septiembre',
+            'October': 'Octubre', 'November': 'Noviembre', 'December': 'Diciembre'
+        }
+        if formato == 'corto':
+            fecha_str = fecha.strftime("%d %b %Y")  # "28 Jan 2026"
+            for en, es in MESES_CORTOS.items():
+                fecha_str = fecha_str.replace(en, es)
+        else:  # formato largo
+            fecha_str = fecha.strftime("%d de %B de %Y")  # "28 de January de 2026"
+            for en, es in MESES_LARGOS.items():
+                fecha_str = fecha_str.replace(en, es)
+        return fecha_str
+    
     # UI de Proyección
     col_inv, col_vel, col_fecha = st.columns(3)
     
@@ -2550,7 +2574,7 @@ def show_stats_page():
             st.caption("🆕 Sin datos aún (usando valor default)")
     
     with col_fecha:
-        st.metric("🎯 Fecha de Término Estimada", fecha_estimada.strftime("%d %b %Y"),
+        st.metric("🎯 Fecha de Término Estimada", fecha_espanol(fecha_estimada, 'corto'),
                  delta=f"~{int(dias_restantes)} días", delta_color="off",
                  help="Basado en tu ritmo actual de aprendizaje.")
     
@@ -2558,7 +2582,7 @@ def show_stats_page():
     if pendientes > 0:
         st.info(f"""
         📊 **Basado en las {total_db:,} preguntas actuales** y tu ritmo de **{v_avg:.1f} nuevas/día**, 
-        terminarás el **{fecha_estimada.strftime('%d de %B de %Y')}**.
+        terminarás el **{fecha_espanol(fecha_estimada, 'largo')}**.
         
         💡 *Si agregas más preguntas al banco, esta fecha se ajustará automáticamente.*
         """)
