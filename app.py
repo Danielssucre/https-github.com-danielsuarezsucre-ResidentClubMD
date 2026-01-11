@@ -2018,6 +2018,14 @@ def render_question_card(question_id):
                         if st.session_state.get('study_session_active'):
                              # Incrementador de sesión
                              st.session_state.session_progress = st.session_state.get('session_progress', 0) + 1
+                             
+                             # MIXED MODE: Incrementar contadores específicos
+                             if st.session_state.get('study_mode') == 'MIXED':
+                                 q_type = st.session_state.current_eval_question_data.get('type', 'unknown')
+                                 if q_type == 'new':
+                                     st.session_state.new_delivered = st.session_state.get('new_delivered', 0) + 1
+                                 elif q_type == 'review':
+                                     st.session_state.reviews_delivered = st.session_state.get('reviews_delivered', 0) + 1
                         
                         if st.session_state.get('practice_mode'):
                             if 'session_answered_ids' not in st.session_state: st.session_state.session_answered_ids = []
@@ -2112,44 +2120,81 @@ def show_evaluation_page():
     Página principal de evaluación con Lógica Segmentada (Aprender vs Repasar).
     Optimizado para Sesiones de 30 tarjetas y UX Limpia.
     """
-    # --- 1. Gestión de Sesión Activa (Selector de Modo) ---
+    # --- 1. Gestión de Sesión Activa (Controlador de Volumen) ---
     if not st.session_state.get('study_session_active', False) and not st.session_state.get('practice_mode'):
         st.title("🧠 Centro de Entrenamiento")
-        st.write("Selecciona tu enfoque de hoy:")
+        st.write("Configura tu sesión de estudio:")
         
-        col_learn, col_rev = st.columns(2)
+        # Obtener contadores actuales de la BD
+        conn = get_db_conn()
+        # Preguntas nuevas disponibles (sin progress)
+        new_available = conn.execute("""
+            SELECT COUNT(*) FROM questions q
+            LEFT JOIN progress p ON q.id = p.question_id AND p.username = ?
+            WHERE q.status = 'active' AND p.question_id IS NULL
+        """, (st.session_state.current_user,)).fetchone()[0]
         
-        with col_learn:
-            st.info("📚 **Modo Aprender**")
-            st.caption("Solo preguntas nuevas que nunca has visto.")
-            if st.button("Iniciar Aprendizaje", key="start_learn", use_container_width=True):
-                st.session_state.study_session_active = True
-                st.session_state.study_mode = 'LEARN'
-                st.session_state.session_progress = 0
-                st.session_state.session_limit = 30 # Opcional: Límite también en learn
-                st.session_state.session_start_time = datetime.datetime.now()
-                # Limpiar pregunta anterior
-                if 'current_eval_question_data' in st.session_state: del st.session_state.current_eval_question_data
-                st.rerun()
-
+        # Repasos vencidos (due_date <= hoy)
+        reviews_due = conn.execute("""
+            SELECT COUNT(*) FROM progress 
+            WHERE username = ? AND due_date <= ?
+        """, (st.session_state.current_user, datetime.date.today().isoformat())).fetchone()[0]
+        conn.close()
+        
+        # --- UI: Panel de Control de Volumen ---
+        st.markdown("### 🎚️ Controlador de Volumen de Sesión")
+        
+        col_new, col_rev = st.columns(2)
+        
+        with col_new:
+            st.markdown("**📚 Preguntas Nuevas (CMTG-5)**")
+            st.caption(f"Disponibles: {new_available:,}")
+            limit_new = st.slider(
+                "¿Cuántas nuevas hoy?",
+                min_value=0,
+                max_value=min(100, new_available),
+                value=min(50, new_available),
+                step=5,
+                key="slider_limit_new",
+                help="Preguntas que nunca has visto. Prioridad máxima."
+            )
+        
         with col_rev:
-            st.warning("🔄 **Modo Repaso**")
-            st.caption("Solo preguntas vencidas (FSRS). Límite: 30 tarjetas.")
-            conn = get_db_conn()
-            due_count = conn.execute("SELECT COUNT(*) FROM progress WHERE username = ? AND due_date <= ?", 
-                                   (st.session_state.current_user, datetime.date.today().isoformat())).fetchone()[0]
-            conn.close()
-            st.metric("Tarjetas Vencidas", due_count)
+            st.markdown("**🔄 Repasos Vencidos (FSRS)**")
+            st.caption(f"Pendientes: {reviews_due:,}")
+            limit_reviews = st.slider(
+                "¿Cuántos repasos para esta sesión?",
+                min_value=0,
+                max_value=min(100, reviews_due) if reviews_due > 0 else 0,
+                value=min(30, reviews_due) if reviews_due > 0 else 0,
+                step=5,
+                key="slider_limit_reviews",
+                help="Repasos ordenados por urgencia (menor estabilidad primero)."
+            )
+        
+        # Resumen de Sesión
+        total_session = limit_new + limit_reviews
+        st.markdown("---")
+        
+        if total_session > 0:
+            st.success(f"**Sesión Configurada:** {limit_new} nuevas + {limit_reviews} repasos = **{total_session} tarjetas**")
+            st.caption("⚡ Las preguntas nuevas se entregarán primero para garantizar avance en el banco.")
             
-            if st.button("Iniciar Repaso Diario", key="start_review", type="primary", use_container_width=True):
+            if st.button("🚀 Iniciar Sesión de Estudio", type="primary", use_container_width=True):
                 st.session_state.study_session_active = True
-                st.session_state.study_mode = 'REVIEW'
+                st.session_state.study_mode = 'MIXED'  # Nuevo modo mixto
                 st.session_state.session_progress = 0
-                st.session_state.session_limit = 30
+                st.session_state.session_limit = total_session
+                st.session_state.limit_new = limit_new
+                st.session_state.limit_reviews = limit_reviews
+                st.session_state.new_delivered = 0  # Contador de nuevas entregadas
+                st.session_state.reviews_delivered = 0  # Contador de repasos entregados
                 st.session_state.session_start_time = datetime.datetime.now()
                 # Limpiar pregunta anterior
                 if 'current_eval_question_data' in st.session_state: del st.session_state.current_eval_question_data
                 st.rerun()
+        else:
+            st.info("Ajusta los sliders para configurar tu sesión. Si no hay preguntas pendientes, ¡felicidades!")
                 
         # Short-circuit para no renderizar nada más
         return
@@ -2179,33 +2224,51 @@ def show_evaluation_page():
         # Layout de Cabecera: Progreso + Widget de Visibilidad
         col_prog, col_vis = st.columns([3, 1])
         with col_prog:
-            st.markdown(f"#### ⏱️ Progreso ({mode}): **{progress} / {limit}**")
-            st.progress(min(progress / limit, 1.0))
+            if mode == 'MIXED':
+                new_d = st.session_state.get('new_delivered', 0)
+                rev_d = st.session_state.get('reviews_delivered', 0)
+                limit_new = st.session_state.get('limit_new', 0)
+                limit_rev = st.session_state.get('limit_reviews', 0)
+                st.markdown(f"#### 📊 Progreso: **{progress} / {limit}**")
+                st.caption(f"📚 Nuevas: {new_d}/{limit_new} | 🔄 Repasos: {rev_d}/{limit_rev}")
+            else:
+                st.markdown(f"#### ⏱️ Progreso ({mode}): **{progress} / {limit}**")
+            st.progress(min(progress / limit, 1.0) if limit > 0 else 1.0)
         
         with col_vis:
             # Widget de Visibilidad (Next Review)
             # Solo podemos mostrarlo si tenemos la pregunta cargada
             if 'current_eval_question_data' in st.session_state and st.session_state.current_eval_question_data:
                 q_id_temp = st.session_state.current_eval_question_data['id']
+                q_type = st.session_state.current_eval_question_data.get('type', 'unknown')
                 conn = get_db_conn()
                 res = conn.execute("SELECT stability FROM progress WHERE username = ? AND question_id = ?", (st.session_state.current_user, q_id_temp)).fetchone()
                 conn.close()
                 s_val = res['stability'] if res else 0.0
                 
-                if s_val > 0:
-                     st.metric("Retentividad", f"{int(s_val)} días", help="FSRS Stability: Estimación de cuánto tiempo recordarás esto.")
+                if q_type == 'new':
+                    st.metric("Tipo", "📚 Nueva", help="Pregunta nunca vista.")
+                elif q_type == 'review':
+                    st.metric("Tipo", f"🔄 Repaso", delta=f"S={int(s_val)}d" if s_val else None, help="FSRS: Menor estabilidad = más urgente.")
+                elif s_val > 0:
+                     st.metric("Retentividad", f"{int(s_val)} días", help="FSRS Stability.")
                 else:
                      st.metric("Estado", "Nueva", help="Pregunta nunca vista.")
 
         # CHECK LIMIT
-        if mode == 'REVIEW' and progress >= limit:
+        if progress >= limit and limit > 0:
             st.success("✅ ¡Sesión Completada!")
-            st.write(f"Has repasado {progress} tarjetas.")
+            if mode == 'MIXED':
+                st.write(f"Has completado {st.session_state.get('new_delivered', 0)} nuevas + {st.session_state.get('reviews_delivered', 0)} repasos.")
+            else:
+                st.write(f"Has completado {progress} tarjetas en modo {mode}.")
             
             if st.button("🏁 Finalizar Sesión", type="primary"):
-                st.session_state.study_session_active = False
-                del st.session_state.study_mode
-                del st.session_state.session_progress
+                # Limpieza de sesión
+                keys_to_clear = ['study_session_active', 'study_mode', 'session_progress', 'session_limit',
+                                'limit_new', 'limit_reviews', 'new_delivered', 'reviews_delivered']
+                for k in keys_to_clear:
+                    if k in st.session_state: del st.session_state[k]
                 st.session_state.current_page = "matrix_dashboard" 
                 st.rerun()
             return

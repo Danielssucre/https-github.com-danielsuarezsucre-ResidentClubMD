@@ -64,7 +64,7 @@ GOLDEN_RATIO_DETAILED = {
     'Vascular': 3
 }
 
-def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO'): # practice_mode es ignorado, study_mode es el nuevo rey
+def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO'):
     """
     Obtiene la próxima pregunta según el Modo de Estudio. (Reingeniería Segmentada)
     
@@ -72,8 +72,9 @@ def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO')
       - 'REVIEW': Solo repaso (due_date <= hoy)
       - 'LEARN': Solo nuevas (sin progress)
       - 'AUTO': Flujo infinito original (mezcla inteligente)
+      - 'MIXED': Modo controlado por volumen (nuevas primero, luego repasos por estabilidad)
       
-    Devuelve un diccionario {'id': question_id, 'is_advance': bool} o None.
+    Devuelve un diccionario {'id': question_id, 'is_advance': bool, 'type': 'new'|'review'} o None.
     """
     conn = dbm.get_db_conn()
     cursor = conn.cursor()
@@ -119,12 +120,74 @@ def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO')
                 practice_question = cursor.fetchone()
 
             if practice_question:
-                return {'id': practice_question['id'], 'is_advance': False}
+                return {'id': practice_question['id'], 'is_advance': False, 'type': 'practice'}
             # No practice question found - fall through to standard logic or return None
             return None
 
-        # --- Paso C: Lógica STANDARD (Si mode != 'MAFU') ---
-        else:
+        # --- B. MODO MIXED (Controlador de Volumen) ---
+        # Prioridad: Nuevas primero (hasta limit_new), luego repasos por estabilidad (hasta limit_reviews)
+        if study_mode == 'MIXED':
+            limit_new = st.session_state.get('limit_new', 50)
+            limit_reviews = st.session_state.get('limit_reviews', 30)
+            new_delivered = st.session_state.get('new_delivered', 0)
+            reviews_delivered = st.session_state.get('reviews_delivered', 0)
+            
+            # Paso 1: Entregar nuevas primero
+            if new_delivered < limit_new:
+                # Buscar pregunta nueva (sin progress para este usuario)
+                cursor.execute("""
+                    SELECT q.id FROM questions q
+                    LEFT JOIN progress p ON q.id = p.question_id AND p.username = ?
+                    WHERE q.status = 'active' AND p.question_id IS NULL
+                    ORDER BY RANDOM() LIMIT 1
+                """, (username,))
+                new_q = cursor.fetchone()
+                if new_q:
+                    return {'id': new_q['id'], 'is_advance': False, 'type': 'new'}
+            
+            # Paso 2: Entregar repasos ordenados por estabilidad (menor = más urgente)
+            if reviews_delivered < limit_reviews:
+                cursor.execute("""
+                    SELECT q.id FROM questions q
+                    JOIN progress p ON q.id = p.question_id
+                    WHERE p.username = ? AND q.status = 'active' AND p.due_date <= ?
+                    ORDER BY p.stability ASC
+                    LIMIT 1
+                """, (username, today))
+                rev_q = cursor.fetchone()
+                if rev_q:
+                    return {'id': rev_q['id'], 'is_advance': False, 'type': 'review'}
+            
+            # Límites alcanzados o no hay más preguntas
+            return None
+
+        # --- C. MODO LEARN (Solo Nuevas) ---
+        if study_mode == 'LEARN':
+            cursor.execute("""
+                SELECT q.id FROM questions q
+                LEFT JOIN progress p ON q.id = p.question_id AND p.username = ?
+                WHERE q.status = 'active' AND p.question_id IS NULL
+                ORDER BY RANDOM() LIMIT 1
+            """, (username,))
+            new_q = cursor.fetchone()
+            if new_q:
+                return {'id': new_q['id'], 'is_advance': False, 'type': 'new'}
+            return None
+
+        # --- D. MODO REVIEW (Solo Repasos) ---
+        if study_mode == 'REVIEW':
+            cursor.execute("""
+                SELECT q.id FROM questions q
+                JOIN progress p ON q.id = p.question_id
+                WHERE p.username = ? AND q.status = 'active' AND p.due_date <= ?
+                ORDER BY p.stability ASC LIMIT 1
+            """, (username, today))
+            rev_q = cursor.fetchone()
+            if rev_q:
+                return {'id': rev_q['id'], 'is_advance': False, 'type': 'review'}
+            return None
+
+        # --- E. Lógica STANDARD/AUTO (Mezcla Inteligente) ---
             # Intento 1: Preguntas Vencidas (due) y Nuevas (new)
             query_priority = """
                 SELECT q.id
