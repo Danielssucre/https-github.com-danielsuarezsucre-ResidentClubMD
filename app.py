@@ -3042,10 +3042,10 @@ def show_manage_questions_page():
                                         # Ahora eliminar preguntas
                                         conn.execute(f"DELETE FROM questions WHERE id IN ({placeholders})", q_ids)
                                     
-                                    # Eliminar de tabla temas
+                                    # Eliminar de tabla temas (solo por nombre, sin filtrar categoría)
                                     conn.execute(
-                                        "DELETE FROM temas WHERE UPPER(nombre) = ? AND categoria = ?",
-                                        (tema_nombre, category)
+                                        "DELETE FROM temas WHERE UPPER(nombre) = ?",
+                                        (tema_nombre,)
                                     )
                                     conn.commit()
                                     st.success(f"Tema '{tema_nombre}' eliminado con {count_tema} preguntas.")
@@ -4770,6 +4770,13 @@ def show_admin_panel():
                                 if reset_topics:
                                     conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = NULL")
                                     st.toast("✅ Temas reiniciados.")
+                                
+                                # 6. Limpiar tabla temas (carpetas por tema)
+                                conn.execute("DELETE FROM temas")
+                                try:
+                                    conn.execute("DELETE FROM sqlite_sequence WHERE name='temas'")
+                                except: pass
+                                st.toast("✅ Carpetas de temas eliminadas.")
                                 
                                 # Log de Auditoría Post-Mortem
                                 import json
