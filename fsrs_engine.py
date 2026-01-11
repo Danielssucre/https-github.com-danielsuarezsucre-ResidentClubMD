@@ -94,6 +94,32 @@ def get_next_question_for_user(username, practice_mode=False, study_mode='AUTO')
                 tag = st.session_state.selected_tag
                 cursor.execute("SELECT id FROM questions WHERE (tag_tema = ? OR tag_tema LIKE ?) AND status = 'active' ORDER BY RANDOM() LIMIT 1", (tag, f"%{tag}%"))
                 practice_question = cursor.fetchone()
+            
+            # Caso A.1: CARPETA POR TEMA (tema_id específico)
+            elif st.session_state.get('active_tema_id'):
+                tema_id = st.session_state.active_tema_id
+                answered_ids = st.session_state.get('session_answered_ids', [])
+                
+                params = [tema_id, username]
+                exclude_clause = ""
+                if answered_ids:
+                    placeholders_exclude = ','.join(['?'] * len(answered_ids))
+                    exclude_clause = f"AND q.id NOT IN ({placeholders_exclude})"
+                    params.extend(answered_ids)
+                
+                # Buscar preguntas del tema que el usuario no haya respondido en esta sesión
+                query = f"""
+                    SELECT q.id FROM questions q
+                    LEFT JOIN progress p ON q.id = p.question_id AND p.username = ?
+                    WHERE q.tema_id = ? AND q.status = 'active'
+                    {exclude_clause}
+                    ORDER BY CASE WHEN p.question_id IS NULL THEN 0 ELSE 1 END, RANDOM()
+                    LIMIT 1
+                """
+                # Reordenar params: username primero para JOIN, luego tema_id
+                cursor.execute(query.replace("q.tema_id = ?", "q.tema_id = ?"), [username, tema_id] + (answered_ids if answered_ids else []))
+                practice_question = cursor.fetchone()
+                
             # Caso B: Especialidad
             elif st.session_state.get('practice_specialty'):
                 specialty = st.session_state.practice_specialty

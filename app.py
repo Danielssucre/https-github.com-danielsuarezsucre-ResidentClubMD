@@ -2313,54 +2313,113 @@ def show_evaluation_page():
 
 def show_topics_page():
     """
-    Biblioteca Simplificada: Entrenamiento Intensivo por Especialidad.
-    Permite seleccionar una especialidad y entrenar con todos sus temas asociados.
+    Biblioteca por Temas: Navegación jerárquica Especialidad → Tema → Preguntas.
+    Muestra Cards con progreso y badge FINALIZADO.
     """
-    st.header("📚 Biblioteca de Especialidades")
-    st.caption("Entrenamiento enfocado: Selecciona una especialidad para iniciar un ciclo intensivo.")
+    st.header("📚 Biblioteca por Temas")
+    st.caption("Selecciona una especialidad para ver los temas disponibles.")
 
     conn = get_db_conn()
+    username = st.session_state.current_user
     
-    # 1. Filtro Maestro: Usar categorías reales del sistema (Escalable)
+    # 1. Selector de Especialidad
     specialties = get_all_categories()
-    
     selected_spec = st.selectbox(
-        "Selecciona una Especialidad:", 
+        "🏷️ Especialidad:", 
         options=specialties, 
         index=None, 
-        placeholder="Ej: Cardiología, Pediatría..."
+        placeholder="Selecciona una especialidad..."
     )
 
     if selected_spec:
         st.markdown("---")
         
-        # 2. Consolidación: Contar preguntas reales (Dinámico - Match Exacto)
-        count_query = "SELECT COUNT(*) FROM questions WHERE tag_categoria = ? AND status = 'active'"
-        real_count = conn.execute(count_query, (selected_spec,)).fetchone()[0]
+        # 2. Obtener temas de esta especialidad desde tabla temas
+        temas = conn.execute("""
+            SELECT t.id, t.nombre, t.total_preguntas,
+                   (SELECT COUNT(*) FROM progress p 
+                    JOIN questions q ON p.question_id = q.id 
+                    WHERE q.tema_id = t.id AND p.username = ? AND p.stability > 0) as completadas
+            FROM temas t
+            WHERE t.categoria = ? AND t.status = 'active'
+            ORDER BY t.nombre ASC
+        """, (username, selected_spec)).fetchall()
         
-        # Estadísticas
-        st.info(f"**{selected_spec}** incluye **{real_count}** preguntas activas en el banco.")
-
-        # 3. Botón de Acción Único
-        if st.button(f"🚀 Iniciar Entrenamiento Intensivo de {selected_spec}", type="primary", use_container_width=True):
-            # 4. Inyección al Generador
-            st.session_state.practice_mode = True
-            st.session_state.practice_specialty = selected_spec
-            # Eliminamos practice_topics para evitar restricciones
-            if 'practice_topics' in st.session_state: del st.session_state.practice_topics
-            # --- AUDITORIA: Inicializar rastreo de sesión ---
-            st.session_state.session_answered_ids = []
-            st.session_state.session_stats = {'correct': 0, 'total': 0}
-            # ----------------------------------------------
+        if not temas:
+            # Fallback: Mostrar temas desde questions si temas está vacío
+            st.info(f"No hay temas estructurados para **{selected_spec}**. Mostrando vista clásica...")
             
-            # Limpiar tag específico si existía
-            if 'selected_tag' in st.session_state:
-                del st.session_state.selected_tag
+            # Contar preguntas por tag_tema
+            tag_temas = conn.execute("""
+                SELECT tag_tema, COUNT(*) as total
+                FROM questions 
+                WHERE tag_categoria = ? AND status = 'active' AND tag_tema IS NOT NULL
+                GROUP BY tag_tema
+                ORDER BY tag_tema ASC
+            """, (selected_spec,)).fetchall()
             
-            # Resetear estado de evaluación
-            st.session_state.current_page = "evaluacion"
-            reset_evaluation_state()
-            st.rerun()
+            if tag_temas:
+                cols = st.columns(3)
+                for i, tema in enumerate(tag_temas):
+                    with cols[i % 3]:
+                        if st.button(f"📁 {tema['tag_tema']}\n({tema['total']} preguntas)", 
+                                    key=f"legacy_tema_{i}", use_container_width=True):
+                            # Iniciar práctica con filtro por tag_tema
+                            st.session_state.practice_mode = True
+                            st.session_state.practice_specialty = selected_spec
+                            st.session_state.selected_tag = tema['tag_tema']
+                            st.session_state.session_answered_ids = []
+                            st.session_state.current_page = "evaluacion"
+                            reset_evaluation_state()
+                            st.rerun()
+            else:
+                # Botón general para toda la especialidad
+                if st.button(f"🚀 Iniciar {selected_spec} (Todas)", type="primary", use_container_width=True):
+                    st.session_state.practice_mode = True
+                    st.session_state.practice_specialty = selected_spec
+                    st.session_state.current_page = "evaluacion"
+                    reset_evaluation_state()
+                    st.rerun()
+        else:
+            # Vista de Cards por Tema
+            st.subheader(f"📂 Temas de {selected_spec}")
+            
+            cols = st.columns(3)
+            for i, tema in enumerate(temas):
+                total = tema['total_preguntas'] or 0
+                completadas = tema['completadas'] or 0
+                
+                # Determinar badge
+                if total > 0 and completadas >= total:
+                    badge = "✅ FINALIZADO"
+                    badge_color = "🟢"
+                elif completadas > 0:
+                    pct = int((completadas / total) * 100) if total > 0 else 0
+                    badge = f"📊 {pct}% ({completadas}/{total})"
+                    badge_color = "🟡"
+                else:
+                    badge = f"📚 {total} preguntas"
+                    badge_color = "⚪"
+                
+                with cols[i % 3]:
+                    st.markdown(f"""
+                    <div style="border: 1px solid #ddd; border-radius: 10px; padding: 15px; margin-bottom: 10px; text-align: center;">
+                        <h4 style="margin: 0;">{badge_color} {tema['nombre']}</h4>
+                        <p style="color: #666; margin: 5px 0;">{badge}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    if st.button("▶️ Iniciar", key=f"tema_{tema['id']}", use_container_width=True):
+                        # Guardar tema activo en sesión
+                        st.session_state.active_tema_id = tema['id']
+                        st.session_state.active_tema_nombre = tema['nombre']
+                        st.session_state.practice_mode = True
+                        st.session_state.practice_specialty = selected_spec
+                        st.session_state.session_answered_ids = []
+                        st.session_state.session_stats = {'correct': 0, 'total': 0}
+                        st.session_state.current_page = "evaluacion"
+                        reset_evaluation_state()
+                        st.rerun()
     
     conn.close()
 

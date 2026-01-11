@@ -434,10 +434,23 @@ SALIDA (JSON ESTRICTO):
                 
                 final_feedback = prefix_fb + explanation
                 
+                # --- CARPETAS POR TEMA: Obtener o crear tema_id ---
+                tema_nombre = topic_name.upper()
+                tema_row = conn.execute("SELECT id FROM temas WHERE nombre = ?", (tema_nombre,)).fetchone()
+                if tema_row:
+                    tema_id = tema_row['id']
+                else:
+                    # Crear nuevo tema
+                    conn.execute(
+                        "INSERT INTO temas (nombre, categoria, created_at) VALUES (?, ?, ?)",
+                        (tema_nombre, category, datetime.datetime.now())
+                    )
+                    tema_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                
                 conn.execute("""
                     INSERT INTO questions 
-                    (owner_username, enunciado, opciones, correcta, retroalimentacion, tag_categoria, tag_tema, created_at, difficulty, ai_generated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    (owner_username, enunciado, opciones, correcta, retroalimentacion, tag_categoria, tag_tema, tema_id, created_at, difficulty, ai_generated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """, (
                     'Matrix_AI', 
                     enunciado, 
@@ -445,16 +458,19 @@ SALIDA (JSON ESTRICTO):
                     correct_answer_str, 
                     final_feedback, 
                     category, 
-                    topic_tag, 
+                    topic_tag,
+                    tema_id,
                     datetime.datetime.now(),
                     'Dificil'
                 ))
                 count += 1
             
             if count > 0:
+                # Actualizar conteo de preguntas en tema
+                conn.execute("UPDATE temas SET total_preguntas = total_preguntas + ? WHERE id = ?", (count, tema_id))
                 conn.execute("UPDATE matrix_topics SET status = 'COMPLETADO' WHERE id = ?", (topic_id,))
                 conn.commit()
-                print(f"[MATRIZ] -> ÉXITO: {count} preguntas insertadas. Tema {topic_id} cerrado.")
+                print(f"[MATRIZ] -> ÉXITO: {count} preguntas insertadas en tema '{tema_nombre}'. Topic {topic_id} cerrado.")
                 return True
             else:
                 conn.rollback()
