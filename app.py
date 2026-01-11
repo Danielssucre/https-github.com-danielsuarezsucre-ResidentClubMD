@@ -3753,25 +3753,26 @@ Asegúrate de generar **5 preguntas** completas. Revisa que ninguna opción sea 
     # --- 1. Formulario de Inyección de Temas ---
     st.subheader("💉 Inyectar Nuevo Tema para Generación")
     with st.form("matrix_injection_form", clear_on_submit=True):
-        # DUAL-SLOT: Nombre corto (etiqueta) + Contenido clínico (texto largo)
+        # DUAL-SLOT: Nombre (carpeta única) + Texto Guía (contenido para IA)
         topic_name = st.text_input(
-            "📌 Nombre del Tema (etiqueta corta)",
-            placeholder="Ej: Malaria, Insuficiencia Cardíaca, Diabetes Mellitus"
+            "📁 Nombre del Tema (Carpeta)",
+            placeholder="Ej: MALARIA, INSUFICIENCIA CARDÍACA, DIABETES MELLITUS",
+            help="Este nombre crea una carpeta única en la biblioteca. Se guarda en MAYÚSCULAS."
         ).strip().upper()
         
         content_text = st.text_area(
-            "📄 Texto Clínico / Guía de Estudio",
+            "📝 Ingrese aquí el texto guía",
             height=300,
             placeholder="Pega aquí el contenido completo del tema (definiciones, clasificaciones, tratamientos, etc.)",
-            help="Este texto será procesado por CMTG-5 para generar las preguntas."
+            help="CMTG-5 usará EXCLUSIVAMENTE este texto para generar las preguntas. No añadirá conocimiento externo."
         ).strip()
         
         # Campo para seleccionar la categoría de destino
         target_category = st.selectbox(
-            "Categoría de Destino",
+            "🏷️ Categoría de Destino",
             options=get_all_categories(),
             index=None,
-            placeholder="Selecciona la categoría principal para la pregunta"
+            placeholder="Selecciona la categoría (Ej: Infectología para MALARIA)"
         )
 
         # Mapeo de Opciones a Valores de Prioridad
@@ -3958,21 +3959,27 @@ Asegúrate de generar **5 preguntas** completas. Revisa que ninguna opción sea 
                     with col4:
                         b_edit, b_del = st.columns(2)
                         with b_edit:
-                            if st.button("📝", key=f"edit_btn_{row['id']}", help="Editar"):
-                                st.session_state.editing_matrix_id = row['id']
-                                st.rerun()
-                        with b_del:
-                            if st.button("🗑️", key=f"delete_topic_{row['id']}", help="Eliminar"):
-                                conn_del = get_db_conn()
-                                try:
-                                    conn_del.execute("DELETE FROM matrix_topics WHERE id = ?", (row['id'],))
-                                    conn_del.commit()
+                            # Solo Admin puede editar nombres de carpeta
+                            if st.session_state.get('user_role') == 'admin':
+                                if st.button("📝", key=f"edit_btn_{row['id']}", help="Editar (Solo Admin)"):
+                                    st.session_state.editing_matrix_id = row['id']
                                     st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error al eliminar tema ID {row['id']}: {e}")
-                                finally:
-                                    if conn_del:
-                                        conn_del.close()
+                            else:
+                                st.button("🔒", key=f"lock_btn_{row['id']}", help="Solo Admin puede editar", disabled=True)
+                        with b_del:
+                            # Solo Admin puede eliminar
+                            if st.session_state.get('user_role') == 'admin':
+                                if st.button("🗑️", key=f"delete_topic_{row['id']}", help="Eliminar"):
+                                    conn_del = get_db_conn()
+                                    try:
+                                        conn_del.execute("DELETE FROM matrix_topics WHERE id = ?", (row['id'],))
+                                        conn_del.commit()
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error al eliminar tema ID {row['id']}: {e}")
+                                    finally:
+                                        if conn_del:
+                                            conn_del.close()
 
     except Exception as e:
         st.error(f"Error al cargar la cola de temas: {e}")
