@@ -66,6 +66,9 @@ def _check_and_seed_database():
 # Ejecutar migración al importar el módulo
 _check_and_seed_database()
 
+# Flag para evitar migraciones duplicadas
+_TEMAS_MIGRATED = False
+
 def _migrate_temas_table():
     """
     Migración para Carpetas por Tema:
@@ -73,10 +76,17 @@ def _migrate_temas_table():
     2. Añade columna 'tema_id' a 'questions' si no existe
     3. Migra datos existentes de matrix_topics a temas
     """
-    # Usar conexión directa (get_db_conn aún no está definida)
-    conn = sqlite3.connect(DB_PATH, timeout=30)
-    conn.row_factory = sqlite3.Row
+    global _TEMAS_MIGRATED
+    if _TEMAS_MIGRATED:
+        return
+    
+    conn = None
     try:
+        # Usar conexión con WAL mode para mejor concurrencia
+        conn = sqlite3.connect(DB_PATH, timeout=60)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.row_factory = sqlite3.Row
+        
         # 1. Crear tabla temas
         conn.execute("""
             CREATE TABLE IF NOT EXISTS temas (
@@ -88,26 +98,31 @@ def _migrate_temas_table():
                 created_at DATETIME
             )
         """)
+        conn.commit()  # Commit inmediato para liberar lock
         
         # 2. Añadir tema_id a questions si no existe
         cols = [row[1] for row in conn.execute("PRAGMA table_info(questions)").fetchall()]
         if 'tema_id' not in cols:
             conn.execute("ALTER TABLE questions ADD COLUMN tema_id INTEGER REFERENCES temas(id)")
+            conn.commit()
             print("✅ MIGRATION: Added tema_id column to questions")
         
         # 3. Migrar matrix_topics existentes a temas (si hay datos)
-        existing_count = conn.execute("SELECT COUNT(*) FROM temas").fetchone()[0]
-        if existing_count == 0:
-            # Importar desde matrix_topics completados
-            conn.execute("""
-                INSERT OR IGNORE INTO temas (nombre, categoria, created_at)
-                SELECT UPPER(topic_name), target_category, created_at 
-                FROM matrix_topics 
-                WHERE status = 'COMPLETADO' AND target_category IS NOT NULL
-            """)
-            migrated = conn.execute("SELECT COUNT(*) FROM temas").fetchone()[0]
-            if migrated > 0:
-                print(f"✅ MIGRATION: Migrated {migrated} topics from matrix_topics to temas")
+        try:
+            existing_count = conn.execute("SELECT COUNT(*) FROM temas").fetchone()[0]
+            if existing_count == 0:
+                conn.execute("""
+                    INSERT OR IGNORE INTO temas (nombre, categoria, created_at)
+                    SELECT UPPER(topic_name), target_category, created_at 
+                    FROM matrix_topics 
+                    WHERE status = 'COMPLETADO' AND target_category IS NOT NULL
+                """)
+                conn.commit()
+                migrated = conn.execute("SELECT COUNT(*) FROM temas").fetchone()[0]
+                if migrated > 0:
+                    print(f"✅ MIGRATION: Migrated {migrated} topics from matrix_topics to temas")
+        except Exception:
+            pass  # matrix_topics might not exist yet
         
         # 4. Vincular preguntas existentes a temas via tag_tema
         conn.execute("""
@@ -115,13 +130,15 @@ def _migrate_temas_table():
             SET tema_id = (SELECT id FROM temas WHERE UPPER(nombre) = UPPER(questions.tag_tema))
             WHERE tema_id IS NULL AND tag_tema IS NOT NULL
         """)
-        
         conn.commit()
+        
+        _TEMAS_MIGRATED = True
         print("✅ TEMAS MIGRATION: Complete")
     except Exception as e:
         print(f"⚠️ TEMAS MIGRATION Warning: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 # Ejecutar migración de temas
 _migrate_temas_table()
