@@ -4540,31 +4540,51 @@ def show_admin_panel():
                         if safety_phrase == "BORRAR TODO":
                             conn = get_db_conn()
                             try:
-                                # Cascade Delete Order: Logs -> Progress-> Questions (User Request V4.0)
+                                # Cascade Delete Order: Respeta FK dependencies
+                                # question_votes → progress → duels → questions → activity_log
                                 st.warning("Iniciando protocolo de vaciado en cascada...")
                                 
-                                # 1. Logs de Actividad
-                                conn.execute("DELETE FROM activity_log")
-                                conn.execute("DELETE FROM sqlite_sequence WHERE name='activity_log'")
-                                st.toast("✅ Logs eliminados.")
+                                # 0. Votos de preguntas (FK a questions y users)
+                                conn.execute("DELETE FROM question_votes")
+                                try:
+                                    conn.execute("DELETE FROM sqlite_sequence WHERE name='question_votes'")
+                                except: pass  # Tabla puede no tener sequence
+                                st.toast("✅ Votos eliminados.")
                                 
-                                # 2. Progreso FSRS
+                                # 1. Progreso FSRS (FK a questions y users)
                                 conn.execute("DELETE FROM progress")
-                                conn.execute("DELETE FROM sqlite_sequence WHERE name='progress'")
+                                try:
+                                    conn.execute("DELETE FROM sqlite_sequence WHERE name='progress'")
+                                except: pass
                                 st.toast("✅ Progreso eliminado.")
                                 
-                                # 3. Preguntas
+                                # 2. Duelos (FK a users)
+                                conn.execute("DELETE FROM duels")
+                                try:
+                                    conn.execute("DELETE FROM sqlite_sequence WHERE name='duels'")
+                                except: pass
+                                st.toast("✅ Duelos eliminados.")
+                                
+                                # 3. Preguntas (ahora libre de dependencias)
                                 conn.execute("DELETE FROM questions")
-                                conn.execute("DELETE FROM sqlite_sequence WHERE name='questions'")
+                                try:
+                                    conn.execute("DELETE FROM sqlite_sequence WHERE name='questions'")
+                                except: pass
                                 st.toast("✅ Preguntas eliminadas.")
                                 
-                                # 4. Duelos y Otros
-                                conn.execute("DELETE FROM duels")
+                                # 4. Logs de Actividad (sin FK, pero limpiamos)
+                                conn.execute("DELETE FROM activity_log")
+                                try:
+                                    conn.execute("DELETE FROM sqlite_sequence WHERE name='activity_log'")
+                                except: pass
+                                st.toast("✅ Logs eliminados.")
                                 
+                                # 5. Reset de temas si solicitado
                                 if reset_topics:
                                     conn.execute("UPDATE matrix_topics SET status = 'PENDIENTE', last_error = NULL")
+                                    st.toast("✅ Temas reiniciados.")
                                 
-                                # Log de Auditoría Post-Mortem (Re-inserting nuclear log)
+                                # Log de Auditoría Post-Mortem
                                 import json
                                 conn.execute(
                                     "INSERT INTO activity_log (username, action_type, metadata, timestamp) VALUES (?, ?, ?, ?)",
