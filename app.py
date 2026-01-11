@@ -2487,12 +2487,87 @@ def show_stats_page():
         # Widget de Próximo Repaso (Estimado)
         next_rev_date = conn.execute("SELECT MIN(due_date) FROM progress WHERE username = ? AND due_date > ?", (st.session_state.current_user, datetime.date.today().strftime('%Y-%m-%d'))).fetchone()[0]
         if next_rev_date:
-             delta = (datetime.datetime.strptime(next_rev_date, '%Y-%m-%d').date() - datetime.date.today()).days
-             st.metric("Próximo Repaso FSRS", f"En {delta} días", "↑ Sigue así")
+            delta = (datetime.datetime.strptime(next_rev_date, '%Y-%m-%d').date() - datetime.date.today()).days
+            st.metric("Próximo Repaso FSRS", f"En {delta} días", "↑ Sigue así")
         else:
-             st.metric("Próximo Repaso", "Al día", "¡Excelente!")
+            st.metric("Próximo Repaso", "Al día", "¡Excelente!")
     
-    # 2. Extracción de Datos Granulares (Ranking Global)
+    # --- 2. MOTOR DE PROYECCIÓN (Calendario de Término) ---
+    st.markdown("---")
+    st.subheader("📅 Proyección de Término")
+    
+    # PASO 1: Conteo de Inventario Real
+    total_db = conn.execute("SELECT COUNT(*) FROM questions WHERE status = 'active'").fetchone()[0]
+    aprendidas = conn.execute("""
+        SELECT COUNT(DISTINCT question_id) FROM progress 
+        WHERE username = ? AND stability > 0
+    """, (st.session_state.current_user,)).fetchone()[0]
+    
+    pendientes = total_db - aprendidas
+    
+    # PASO 2: Cálculo de Velocidad de Absorción (últimos 7 días)
+    # Cuenta cuántas preguntas pasaron de stability=0 a stability>0 por día
+    velocity_query = """
+        SELECT DATE(last_review) as dia, COUNT(*) as nuevas_aprendidas
+        FROM progress
+        WHERE username = ? 
+          AND stability > 0 
+          AND last_review >= DATE('now', '-7 days')
+        GROUP BY DATE(last_review)
+        ORDER BY dia DESC
+    """
+    velocity_data = conn.execute(velocity_query, (st.session_state.current_user,)).fetchall()
+    
+    if velocity_data:
+        total_learned_7d = sum(row['nuevas_aprendidas'] for row in velocity_data)
+        days_with_activity = len(velocity_data)
+        v_avg = total_learned_7d / 7.0  # Promedio sobre 7 días, no solo días activos
+    else:
+        v_avg = 1.0  # Valor por defecto para usuarios nuevos
+    
+    # Evitar división por cero
+    v_avg = max(v_avg, 0.1)
+    
+    # PASO 3: Proyección de Calendario
+    dias_restantes = pendientes / v_avg
+    fecha_estimada = datetime.date.today() + datetime.timedelta(days=int(dias_restantes))
+    
+    # UI de Proyección
+    col_inv, col_vel, col_fecha = st.columns(3)
+    
+    with col_inv:
+        st.metric("🗃️ Inventario Total", f"{total_db:,}", 
+                 delta=f"-{aprendidas:,} aprendidas", delta_color="normal",
+                 help="Total de preguntas activas en la base de datos.")
+        st.caption(f"📚 Pendientes: **{pendientes:,}**")
+    
+    with col_vel:
+        st.metric("⚡ Velocidad de Absorción", f"{v_avg:.1f} / día",
+                 help="Promedio de preguntas nuevas aprendidas en los últimos 7 días.")
+        if velocity_data:
+            st.caption(f"📈 Últimos 7 días: {total_learned_7d} preguntas")
+        else:
+            st.caption("🆕 Sin datos aún (usando valor default)")
+    
+    with col_fecha:
+        st.metric("🎯 Fecha de Término Estimada", fecha_estimada.strftime("%d %b %Y"),
+                 delta=f"~{int(dias_restantes)} días", delta_color="off",
+                 help="Basado en tu ritmo actual de aprendizaje.")
+    
+    # Mensaje motivacional
+    if pendientes > 0:
+        st.info(f"""
+        📊 **Basado en las {total_db:,} preguntas actuales** y tu ritmo de **{v_avg:.1f} nuevas/día**, 
+        terminarás el **{fecha_estimada.strftime('%d de %B de %Y')}**.
+        
+        💡 *Si agregas más preguntas al banco, esta fecha se ajustará automáticamente.*
+        """)
+    else:
+        st.success("🎉 ¡Has completado todas las preguntas del banco! Ahora enfócate en los repasos.")
+    
+    st.markdown("---")
+    
+    # 3. Extracción de Datos Granulares (Ranking Global)
     total_questions_global = conn.execute("SELECT COUNT(*) as count FROM questions WHERE status = 'active'").fetchone()['count']
     
     # Query maestra actualizada para maestría ponderada
