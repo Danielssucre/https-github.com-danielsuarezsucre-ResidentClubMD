@@ -3027,19 +3027,32 @@ def show_manage_questions_page():
                             
                             if col_yes.button("🗑️ Sí, eliminar todo", key=f"confirm_del_tema_{category}_{tema_nombre}", type="primary"):
                                 conn = get_db_conn()
-                                # Eliminar preguntas
-                                conn.execute(
-                                    "DELETE FROM questions WHERE tag_categoria = ? AND UPPER(tag_tema) = ?",
-                                    (category, tema_nombre)
-                                )
-                                # Eliminar de tabla temas
-                                conn.execute(
-                                    "DELETE FROM temas WHERE UPPER(nombre) = ? AND categoria = ?",
-                                    (tema_nombre, category)
-                                )
-                                conn.commit()
-                                conn.close()
-                                st.success(f"Tema '{tema_nombre}' eliminado con {count_tema} preguntas.")
+                                try:
+                                    # Obtener IDs de preguntas a eliminar
+                                    q_ids = [r[0] for r in conn.execute(
+                                        "SELECT id FROM questions WHERE tag_categoria = ? AND UPPER(tag_tema) = ?",
+                                        (category, tema_nombre)
+                                    ).fetchall()]
+                                    
+                                    if q_ids:
+                                        placeholders = ','.join(['?'] * len(q_ids))
+                                        # Eliminar registros relacionados primero (FK CASCADE)
+                                        conn.execute(f"DELETE FROM progress WHERE question_id IN ({placeholders})", q_ids)
+                                        conn.execute(f"DELETE FROM question_votes WHERE question_id IN ({placeholders})", q_ids)
+                                        # Ahora eliminar preguntas
+                                        conn.execute(f"DELETE FROM questions WHERE id IN ({placeholders})", q_ids)
+                                    
+                                    # Eliminar de tabla temas
+                                    conn.execute(
+                                        "DELETE FROM temas WHERE UPPER(nombre) = ? AND categoria = ?",
+                                        (tema_nombre, category)
+                                    )
+                                    conn.commit()
+                                    st.success(f"Tema '{tema_nombre}' eliminado con {count_tema} preguntas.")
+                                except Exception as e:
+                                    st.error(f"Error al eliminar: {e}")
+                                finally:
+                                    conn.close()
                                 st.session_state.confirm_delete_tema = None
                                 st.rerun()
                             
