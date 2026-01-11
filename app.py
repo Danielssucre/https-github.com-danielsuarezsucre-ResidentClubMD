@@ -2381,36 +2381,36 @@ def show_topics_page():
                     reset_evaluation_state()
                     st.rerun()
         else:
-            # Vista de Cards por Tema
+            # Vista de Cards por Tema (Compacta)
             st.subheader(f"📂 Temas de {selected_spec}")
             
-            cols = st.columns(3)
-            for i, tema in enumerate(temas):
+            for tema in temas:
                 total = tema['total_preguntas'] or 0
                 completadas = tema['completadas'] or 0
                 
                 # Determinar badge
                 if total > 0 and completadas >= total:
-                    badge = "✅ FINALIZADO"
-                    badge_color = "🟢"
+                    badge = "✅"
+                    status_text = "Finalizado"
                 elif completadas > 0:
                     pct = int((completadas / total) * 100) if total > 0 else 0
-                    badge = f"📊 {pct}% ({completadas}/{total})"
-                    badge_color = "🟡"
+                    badge = "🟡"
+                    status_text = f"{pct}%"
                 else:
-                    badge = f"📚 {total} preguntas"
-                    badge_color = "⚪"
+                    badge = "⚪"
+                    status_text = "Nuevo"
                 
-                with cols[i % 3]:
-                    st.markdown(f"""
-                    <div style="border: 1px solid #ddd; border-radius: 10px; padding: 15px; margin-bottom: 10px; text-align: center;">
-                        <h4 style="margin: 0;">{badge_color} {tema['nombre']}</h4>
-                        <p style="color: #666; margin: 5px 0;">{badge}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    if st.button("▶️ Iniciar", key=f"tema_{tema['id']}", use_container_width=True):
-                        # Guardar tema activo en sesión
+                # Layout horizontal: 4 columnas [badge | nombre | conteo | botón]
+                col_badge, col_name, col_count, col_btn = st.columns([0.5, 3, 1.5, 1])
+                
+                with col_badge:
+                    st.markdown(f"<span style='font-size: 1.2em;'>{badge}</span>", unsafe_allow_html=True)
+                with col_name:
+                    st.markdown(f"**{tema['nombre']}**")
+                with col_count:
+                    st.caption(f"📚 {total} • {status_text}")
+                with col_btn:
+                    if st.button("▶️", key=f"tema_{tema['id']}", help=f"Iniciar {tema['nombre']}"):
                         st.session_state.active_tema_id = tema['id']
                         st.session_state.active_tema_nombre = tema['nombre']
                         st.session_state.practice_mode = True
