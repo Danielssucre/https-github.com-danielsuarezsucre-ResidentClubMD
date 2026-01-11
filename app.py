@@ -2913,16 +2913,23 @@ def show_manage_questions_page():
                 st.rerun()
         return
 
-    # --- VISTA PRINCIPAL (LISTADO POR CATEGORÍAS) ---
+    # --- VISTA PRINCIPAL (LISTADO POR CATEGORÍAS Y TEMAS) ---
     st.subheader("🔑 Gestionar Preguntas" if is_admin else "📋 Mis Preguntas")
+    
+    # Estado para edición de tema
+    if 'editing_tema_nombre' not in st.session_state:
+        st.session_state.editing_tema_nombre = None
+    if 'confirm_delete_tema' not in st.session_state:
+        st.session_state.confirm_delete_tema = None
+    
     conn = get_db_conn()
     
     # Query para Admins (trae todo) o Usuarios (solo las suyas)
     if is_admin:
-        query = "SELECT id, enunciado, owner_username, status, tag_categoria FROM questions ORDER BY id DESC"
+        query = "SELECT id, enunciado, owner_username, status, tag_categoria, tag_tema FROM questions ORDER BY tag_categoria, tag_tema, id DESC"
         params = ()
     else:
-        query = "SELECT id, enunciado, owner_username, status, tag_categoria FROM questions WHERE owner_username = ? ORDER BY id DESC"
+        query = "SELECT id, enunciado, owner_username, status, tag_categoria, tag_tema FROM questions WHERE owner_username = ? ORDER BY tag_categoria, tag_tema, id DESC"
         params = (st.session_state.current_user,)
     
     preguntas = conn.execute(query, params).fetchall()
@@ -2934,89 +2941,173 @@ def show_manage_questions_page():
         # 1. Buscador
         search_q = st.text_input("🔍 Buscar en banco de preguntas:", "").lower().strip()
 
-        # 2. Filtrado y Agrupación
-        grouped_questions = {}
+        # 2. Agrupación Jerárquica: Categoría → Tema → Preguntas
+        hierarchy = {}
         for p in preguntas:
-            # Filtro de texto
             if search_q and search_q not in p['enunciado'].lower():
                 continue
-
-            # Agrupación
-            cat = p['tag_categoria'] if p['tag_categoria'] else "General / Sin Etiqueta"
-            if cat not in grouped_questions:
-                grouped_questions[cat] = []
-            grouped_questions[cat].append(p)
             
-        # 3. Renderizado por Categorías
-        if not grouped_questions:
+            cat = p['tag_categoria'] or "Sin Categoría"
+            tema = (p['tag_tema'] or "SIN TEMA").upper()
+            
+            if cat not in hierarchy:
+                hierarchy[cat] = {}
+            if tema not in hierarchy[cat]:
+                hierarchy[cat][tema] = []
+            hierarchy[cat][tema].append(p)
+            
+        # 3. Renderizado Jerárquico
+        if not hierarchy:
             st.warning(f"🚫 No se encontraron preguntas que coincidan con '{search_q}'.")
         else:
-            for category in sorted(grouped_questions.keys()):
-                count = len(grouped_questions[category])
-                with st.expander(f"📂 {category} ({count})", expanded=False):
-                    for preg in grouped_questions[category]:
-                        # --- INICIO DEL CÓDIGO ORIGINAL DE LA TARJETA ---
-                        pregunta_id = preg['id']
-                        with st.container(border=True):
-                            col_main, col_buttons = st.columns([0.8, 0.2])
-
-                            with col_main:
-                                col_main.write(preg['enunciado'])
+            for category in sorted(hierarchy.keys()):
+                total_cat = sum(len(qs) for qs in hierarchy[category].values())
+                with st.expander(f"📂 {category} ({total_cat})", expanded=False):
+                    
+                    for tema_nombre in sorted(hierarchy[category].keys()):
+                        questions_in_tema = hierarchy[category][tema_nombre]
+                        count_tema = len(questions_in_tema)
+                        
+                        # --- ENCABEZADO DE SUBCARPETA (TEMA) ---
+                        col_tema, col_tools = st.columns([4, 2])
+                        
+                        with col_tema:
+                            st.markdown(f"##### 📁 TEMA: {tema_nombre} ({count_tema})")
+                        
+                        # Herramientas de carpeta (Solo Admin)
+                        if is_admin:
+                            with col_tools:
+                                tool_col1, tool_col2 = st.columns(2)
                                 
-                                if preg['status'] == 'needs_revision':
-                                    col_main.warning("⚠️ En Revisión")
+                                # Botón Editar Nombre de Tema
+                                with tool_col1:
+                                    if st.button("✏️ Editar", key=f"edit_tema_{category}_{tema_nombre}", help="Renombrar tema"):
+                                        st.session_state.editing_tema_nombre = (category, tema_nombre)
+                                        st.rerun()
                                 
-                                if is_admin:
-                                    col_main.caption(f"Autor: {preg['owner_username']}")
-
-                            if st.session_state.confirm_delete_id == pregunta_id:
-                                with col_main:
-                                    st.warning("¿Seguro que deseas eliminar esta pregunta?")
+                                # Botón Eliminar Tema Completo
+                                with tool_col2:
+                                    if st.button("🗑️ Eliminar Todo", key=f"del_tema_{category}_{tema_nombre}", help="Eliminar tema y preguntas"):
+                                        st.session_state.confirm_delete_tema = (category, tema_nombre)
+                                        st.rerun()
+                        
+                        # --- MODAL: Editar Nombre de Tema ---
+                        if st.session_state.editing_tema_nombre == (category, tema_nombre):
+                            with st.form(f"rename_tema_{category}_{tema_nombre}"):
+                                st.info(f"Renombrando tema: **{tema_nombre}**")
+                                new_tema_name = st.text_input("Nuevo nombre:", value=tema_nombre).strip().upper()
                                 
-                                with col_buttons:
-                                    confirm_col1, confirm_col2 = st.columns(2)
-                                    
-                                    if confirm_col1.button("Sí, eliminar", key=f"confirm_del_{pregunta_id}", type="primary"):
+                                col_save, col_cancel = st.columns(2)
+                                if col_save.form_submit_button("💾 Guardar", type="primary"):
+                                    if new_tema_name and new_tema_name != tema_nombre:
                                         conn = get_db_conn()
-
-                                        # --- SECURITY CHECK (IDOR) ---
-                                        # Verificar en DB quién es el dueño real antes de borrar
-                                        check_owner = conn.execute("SELECT owner_username FROM questions WHERE id = ?", (pregunta_id,)).fetchone()
-                                        if not check_owner:
-                                            st.error("La pregunta ya no existe.")
-                                            st.stop()
-                                            
-                                        real_owner = check_owner[0]
-                                        current_user = st.session_state.current_user
-                                        user_role = st.session_state.user_role
-                                        
-                                        # Solo pasa si eres el dueño O eres admin
-                                        if real_owner != current_user and user_role != 'admin':
-                                            st.error("🚨 ALERTA DE SEGURIDAD: Intento de modificación no autorizado detectado.")
-                                            # (Opcional) Podríamos loguear esto, pero por ahora detenemos la ejecución.
-                                            st.stop()
-                                        # --- FIN SECURITY CHECK ---
-
-                                        conn.execute("DELETE FROM questions WHERE id = ?", (pregunta_id,))
+                                        conn.execute(
+                                            "UPDATE questions SET tag_tema = ? WHERE tag_categoria = ? AND UPPER(tag_tema) = ?",
+                                            (new_tema_name, category, tema_nombre)
+                                        )
+                                        # También actualizar tabla temas si existe
+                                        conn.execute(
+                                            "UPDATE temas SET nombre = ? WHERE UPPER(nombre) = ? AND categoria = ?",
+                                            (new_tema_name, tema_nombre, category)
+                                        )
                                         conn.commit()
                                         conn.close()
-                                        st.success(f"Pregunta {pregunta_id} eliminada.")
-                                        st.session_state.confirm_delete_id = None
-                                        st.rerun()
+                                        st.success(f"Tema renombrado: {tema_nombre} → {new_tema_name}")
+                                    st.session_state.editing_tema_nombre = None
+                                    st.rerun()
+                                
+                                if col_cancel.form_submit_button("Cancelar"):
+                                    st.session_state.editing_tema_nombre = None
+                                    st.rerun()
+                        
+                        # --- MODAL: Confirmar Eliminación de Tema ---
+                        if st.session_state.confirm_delete_tema == (category, tema_nombre):
+                            st.warning(f"⚠️ ¿Eliminar **{tema_nombre}** y sus {count_tema} preguntas?")
+                            col_yes, col_no = st.columns(2)
+                            
+                            if col_yes.button("🗑️ Sí, eliminar todo", key=f"confirm_del_tema_{category}_{tema_nombre}", type="primary"):
+                                conn = get_db_conn()
+                                # Eliminar preguntas
+                                conn.execute(
+                                    "DELETE FROM questions WHERE tag_categoria = ? AND UPPER(tag_tema) = ?",
+                                    (category, tema_nombre)
+                                )
+                                # Eliminar de tabla temas
+                                conn.execute(
+                                    "DELETE FROM temas WHERE UPPER(nombre) = ? AND categoria = ?",
+                                    (tema_nombre, category)
+                                )
+                                conn.commit()
+                                conn.close()
+                                st.success(f"Tema '{tema_nombre}' eliminado con {count_tema} preguntas.")
+                                st.session_state.confirm_delete_tema = None
+                                st.rerun()
+                            
+                            if col_no.button("Cancelar", key=f"cancel_del_tema_{category}_{tema_nombre}"):
+                                st.session_state.confirm_delete_tema = None
+                                st.rerun()
+                        
+                        # --- LISTADO DE PREGUNTAS EN EL TEMA ---
+                        for preg in questions_in_tema:
+                            # --- INICIO DEL CÓDIGO ORIGINAL DE LA TARJETA ---
+                            pregunta_id = preg['id']
+                            with st.container(border=True):
+                                col_main, col_buttons = st.columns([0.8, 0.2])
+
+                                with col_main:
+                                    col_main.write(preg['enunciado'])
                                     
-                                    if confirm_col2.button("Cancelar", key=f"cancel_del_{pregunta_id}"):
-                                        st.session_state.confirm_delete_id = None
-                                        st.rerun()
-                            else:
-                                with col_buttons:
-                                    if st.button("✏️ Editar", key=f"edit_{pregunta_id}"):
-                                        st.session_state.editing_question_id = pregunta_id
-                                        st.rerun()
+                                    if preg['status'] == 'needs_revision':
+                                        col_main.warning("⚠️ En Revisión")
                                     
-                                    if st.button("🗑️ Eliminar", key=f"del_{pregunta_id}", type="primary"):
-                                        st.session_state.confirm_delete_id = pregunta_id
-                                        st.rerun()
-                        # --- FIN DEL CÓDIGO ORIGINAL DE LA TARJETA ---
+                                    if is_admin:
+                                        col_main.caption(f"Autor: {preg['owner_username']}")
+
+                                if st.session_state.confirm_delete_id == pregunta_id:
+                                    with col_main:
+                                        st.warning("¿Seguro que deseas eliminar esta pregunta?")
+                                    
+                                    with col_buttons:
+                                        confirm_col1, confirm_col2 = st.columns(2)
+                                        
+                                        if confirm_col1.button("Sí, eliminar", key=f"confirm_del_{pregunta_id}", type="primary"):
+                                            conn = get_db_conn()
+
+                                            # --- SECURITY CHECK (IDOR) ---
+                                            check_owner = conn.execute("SELECT owner_username FROM questions WHERE id = ?", (pregunta_id,)).fetchone()
+                                            if not check_owner:
+                                                st.error("La pregunta ya no existe.")
+                                                st.stop()
+                                                
+                                            real_owner = check_owner[0]
+                                            current_user = st.session_state.current_user
+                                            user_role = st.session_state.user_role
+                                            
+                                            if real_owner != current_user and user_role != 'admin':
+                                                st.error("🚨 ALERTA DE SEGURIDAD: Intento de modificación no autorizado detectado.")
+                                                st.stop()
+                                            # --- FIN SECURITY CHECK ---
+
+                                            conn.execute("DELETE FROM questions WHERE id = ?", (pregunta_id,))
+                                            conn.commit()
+                                            conn.close()
+                                            st.success(f"Pregunta {pregunta_id} eliminada.")
+                                            st.session_state.confirm_delete_id = None
+                                            st.rerun()
+                                        
+                                        if confirm_col2.button("Cancelar", key=f"cancel_del_{pregunta_id}"):
+                                            st.session_state.confirm_delete_id = None
+                                            st.rerun()
+                                else:
+                                    with col_buttons:
+                                        if st.button("✏️ Editar", key=f"edit_{pregunta_id}"):
+                                            st.session_state.editing_question_id = pregunta_id
+                                            st.rerun()
+                                        
+                                        if st.button("🗑️ Eliminar", key=f"del_{pregunta_id}", type="primary"):
+                                            st.session_state.confirm_delete_id = pregunta_id
+                                            st.rerun()
+                            # --- FIN DEL CÓDIGO ORIGINAL DE LA TARJETA ---
 
 # --- INICIO DE SECCIÓN NUEVA: PÁGINA DE DUELOS ---
 def play_duel_interface():
