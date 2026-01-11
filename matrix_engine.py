@@ -183,7 +183,7 @@ class MatrixWorker(threading.Thread):
                 # Buscar UN tema pendiente de esta especialidad
                 # Usamos target_category que debe coincidir con el nombre de la especialidad
                 row = conn.execute("""
-                    SELECT id, topic_name, target_category 
+                    SELECT id, topic_name, target_category, content_text 
                     FROM matrix_topics 
                     WHERE status = 'PENDIENTE' AND target_category = ?
                     ORDER BY priority ASC, created_at ASC
@@ -198,7 +198,7 @@ class MatrixWorker(threading.Thread):
             # tomamos cualquiera por prioridad estándar (llenar huecos o temas sin categoría definida)
             print("[MATRIZ] -> No se encontraron temas específicos para cubrir déficits. Usando Fallback General.")
             row = conn.execute("""
-                SELECT id, topic_name, target_category 
+                SELECT id, topic_name, target_category, content_text 
                 FROM matrix_topics 
                 WHERE status = 'PENDIENTE' 
                 ORDER BY priority ASC, created_at ASC 
@@ -233,10 +233,12 @@ class MatrixWorker(threading.Thread):
         """
         topic_id = topic['id']
         topic_name = topic['topic_name']
+        # DUAL-SLOT: Usar content_text si existe, sino fallback a topic_name
+        content_text = topic.get('content_text') or topic_name
         category = topic.get('target_category', 'General')
         
         # --- FASE 1: BLOQUEO (DB) ---
-        print(f"[MATRIZ] -> Fase 1: Bloqueando tema {topic_id}...")
+        print(f"[MATRIZ] -> Fase 1: Bloqueando tema {topic_id} ({topic_name})...")
         self.update_topic_status(topic_id, 'PROCESANDO')
         
         # Obtener config (Lectura rápida)
@@ -250,13 +252,14 @@ class MatrixWorker(threading.Thread):
         if not prompt_template:
             prompt_template = "Genera 5 preguntas de opción múltiple sobre {topic_name} para médicos residentes. Nivel Difícil. Formato JSON lista: enunciado, opciones, correcta, retroalimentacion."
 
-        # USAMOS .replace() en lugar de .format() para evitar KeyError si el prompt tiene JSON brackets {}
-        final_prompt = prompt_template.replace("{topic_name}", topic_name)
+        # USAMOS .replace() - Ahora inyecta content_text (contenido clínico) en lugar del título
+        final_prompt = prompt_template.replace("{topic_name}", content_text)
         
         # [DEBUG] Log para auditoría - Ver qué se está enviando
-        print(f"[MATRIZ] -> [DEBUG] topic_name length: {len(topic_name)} chars")
+        print(f"[MATRIZ] -> [DEBUG] topic_name: {topic_name}")
+        print(f"[MATRIZ] -> [DEBUG] content_text length: {len(content_text)} chars")
         print(f"[MATRIZ] -> [DEBUG] final_prompt length: {len(final_prompt)} chars")
-        print(f"[MATRIZ] -> [DEBUG] topic_name preview: {topic_name[:200]}..." if len(topic_name) > 200 else f"[MATRIZ] -> [DEBUG] topic_name: {topic_name}")
+        print(f"[MATRIZ] -> [DEBUG] content preview: {content_text[:200]}..." if len(content_text) > 200 else f"[MATRIZ] -> [DEBUG] content: {content_text}")
         
         # Verificar que el texto se insertó correctamente
         if "{topic_name}" in final_prompt:

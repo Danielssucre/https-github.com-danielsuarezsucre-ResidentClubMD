@@ -3753,12 +3753,23 @@ Asegúrate de generar **5 preguntas** completas. Revisa que ninguna opción sea 
     # --- 1. Formulario de Inyección de Temas ---
     st.subheader("💉 Inyectar Nuevo Tema para Generación")
     with st.form("matrix_injection_form", clear_on_submit=True):
-        topic_name = st.text_input("Nombre del Tema (Ej: 'Fisiología Renal')").strip()
+        # DUAL-SLOT: Nombre corto (etiqueta) + Contenido clínico (texto largo)
+        topic_name = st.text_input(
+            "📌 Nombre del Tema (etiqueta corta)",
+            placeholder="Ej: Malaria, Insuficiencia Cardíaca, Diabetes Mellitus"
+        ).strip().upper()
+        
+        content_text = st.text_area(
+            "📄 Texto Clínico / Guía de Estudio",
+            height=300,
+            placeholder="Pega aquí el contenido completo del tema (definiciones, clasificaciones, tratamientos, etc.)",
+            help="Este texto será procesado por CMTG-5 para generar las preguntas."
+        ).strip()
         
         # Campo para seleccionar la categoría de destino
         target_category = st.selectbox(
             "Categoría de Destino",
-            options=get_all_categories(), # Usar la función helper
+            options=get_all_categories(),
             index=None,
             placeholder="Selecciona la categoría principal para la pregunta"
         )
@@ -3770,20 +3781,26 @@ Asegúrate de generar **5 preguntas** completas. Revisa que ninguna opción sea 
         submitted = st.form_submit_button("Añadir a la Cola")
         
         if submitted:
-            if not topic_name or not target_category:
-                st.warning("El nombre del tema y la categoría de destino no pueden estar vacíos.")
+            if not topic_name or not content_text or not target_category:
+                st.warning("Todos los campos son obligatorios: Nombre, Texto Clínico y Categoría.")
             else:
                 priority_value = priority_options[selected_priority_label]
                 conn = None
                 try:
                     conn = get_db_conn()
                     cursor = conn.cursor()
+                    
+                    # Verificar si existe columna content_text, si no, crearla
+                    cols = [row[1] for row in cursor.execute("PRAGMA table_info(matrix_topics)").fetchall()]
+                    if 'content_text' not in cols:
+                        cursor.execute("ALTER TABLE matrix_topics ADD COLUMN content_text TEXT")
+                    
                     cursor.execute(
-                        "INSERT INTO matrix_topics (topic_name, priority, target_category, created_at) VALUES (?, ?, ?, ?)",
-                        (topic_name, priority_value, target_category, datetime.datetime.now())
+                        "INSERT INTO matrix_topics (topic_name, content_text, priority, target_category, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (topic_name, content_text, priority_value, target_category, datetime.datetime.now())
                     )
                     conn.commit()
-                    st.success(f"¡Tema '{topic_name}' añadido a la cola para la categoría '{target_category}'!")
+                    st.success(f"¡Tema '{topic_name}' añadido! ({len(content_text):,} caracteres de contenido)")
                 except sqlite3.IntegrityError:
                     st.warning(f"El tema '{topic_name}' ya existe en la cola.")
                 except Exception as e:
