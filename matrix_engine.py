@@ -469,9 +469,10 @@ SALIDA (JSON ESTRICTO):
             conn.close()
 
     def call_gemini_api(self, api_key, prompt):
-        # Lista de modelos: SOLO Flash-Lite (v2.5) para ahorro máximo. 
+        # Lista de modelos: Flash-Lite primero, luego Flash regular como fallback
         models_to_try = [
-            "gemini-2.5-flash-lite" 
+            "gemini-2.0-flash",  # Más rápido y capaz para textos largos
+            "gemini-2.5-flash-lite"  # Fallback económico
         ]
         
         headers = {'Content-Type': 'application/json'}
@@ -494,7 +495,8 @@ SALIDA (JSON ESTRICTO):
             
             try:
                 print(f"[MATRIZ] -> Intentando con modelo: {model_name}...")
-                response = requests.post(current_url, headers=headers, params=params, json=data, timeout=60)
+                # Timeout aumentado a 180s para textos largos + CMTG-5 prompt
+                response = requests.post(current_url, headers=headers, params=params, json=data, timeout=180)
                 
                 if response.status_code == 200:
                     result = response.json()
